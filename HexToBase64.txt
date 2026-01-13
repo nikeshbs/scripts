@@ -1,0 +1,163 @@
+' HexToBase64.vbs
+' VBScript program to convert a hex string into a base64 encoded string.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2010 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - January 7, 2010
+'
+' Syntax:
+'     cscript //nologo HexToBase64.vbs <hex string>
+' where:
+'     <hex string> is a string of hexadecimal bytes. Each byte is
+'         two hexadecimal digits.
+' If no parameter is supplied, the program will prompt.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim strValue, strHexValue, intLen, objRE, objMatches, objMatch, strBase64
+
+Const B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+If (Wscript.Arguments.Count <> 1) Then
+    strValue = InputBox("Enter hexadecimal byte string", "HexToBase64.vbs")
+Else
+    strValue = Wscript.Arguments(0)
+End If
+
+' Check for syntax help.
+If (strValue = "/?") _
+        Or (strValue = "-?") _
+        Or (strValue = "?") _
+        Or (strValue = "/H") _
+        Or (strValue = "/h") _
+        Or (strValue = "-H") _
+        Or (strValue = "-h") _
+        Or (strValue = "/help") _
+        Or (strValue = "-help") Then
+    Call Syntax()
+    Wscript.Quit
+End If
+
+' Remove allowed byte delimiters.
+strHexValue = Replace(strValue, "/", "")
+strHexValue = Replace(strHexValue, "\", "")
+strHexValue = Replace(strHexValue, "-", "")
+strHexValue = Replace(strHexValue, " ", "")
+strHexValue = Replace(strHexValue, ",", "")
+
+intLen = Len(strHexValue)
+
+' Validate string.
+Set objRE = New RegExp
+objRE.Pattern = "[A-Fa-f0-9]+"
+objRE.Global = True
+Set objMatches = objRE.Execute(strHexValue)
+If (objMatches.Count <> 1) Then
+    Wscript.Echo "Invalid hexadecimal string: " & strValue
+    Call Syntax()
+    Wscript.Quit
+End If
+For Each objMatch In objMatches
+    If (objMatch.Length <> intLen) Then
+        Wscript.Echo "Invalid hexadecimal string: " & strValue
+        Call Syntax()
+        Wscript.Quit
+    End If
+Next
+
+If (intLen Mod 2 <> 0) Then
+    Wscript.Echo "Byte string must have two hexadecimal characters"
+    Wscript.Echo "per byte: " & strValue
+    Call Syntax()
+    Wscript.Quit
+End If
+
+' Convert hexadecimal string into Base64 characters.
+strBase64 = HexToBase64(strHexValue)
+
+' Output Base64 encoded string in lines of 76 characters each.
+Do Until Len(strBase64) = 0
+    Wscript.Echo Mid(strBase64, 1, 76)
+    If (Len(strBase64) > 76) Then
+        strBase64 = Right(strBase64, Len(strBase64) - 76)
+    Else
+        Exit Do
+    End If
+Loop
+
+Function HexToBase64(strHex)
+    ' Function to convert a hex string into a base64 encoded string.
+    ' Constant B64 has global scope.
+    Dim lngValue, lngTemp, lngChar, intLen, k, j, strWord, str64, intTerm
+
+    intLen = Len(strHex)
+
+    ' Pad with zeros to multiple of 3 bytes.
+    intTerm = intLen Mod 6
+    If (intTerm = 4) Then
+        strHex = strHex & "00"
+        intLen = intLen + 2
+    End If
+    If (intTerm = 2) Then
+        strHex = strHex & "0000"
+        intLen = intLen + 4
+    End If
+
+    ' Parse into groups of 3 hex bytes.
+    j = 0
+    strWord = ""
+    HexToBase64 = ""
+    For k = 1 To intLen Step 2
+        j = j + 1
+        strWord = strWord & Mid(strHex, k, 2)
+        If (j = 3) Then
+            ' Convert 3 8-bit bytes into 4 6-bit characters.
+            lngValue = CCur("&H" & strWord)
+
+            lngTemp = Fix(lngValue / 64)
+            lngChar = lngValue - (64 * lngTemp)
+            str64 = Mid(B64, lngChar + 1, 1)
+            lngValue = lngTemp
+
+            lngTemp = Fix(lngValue / 64)
+            lngChar = lngValue - (64 * lngTemp)
+            str64 = Mid(B64, lngChar + 1, 1) & str64
+            lngValue = lngTemp
+
+            lngTemp = Fix(lngValue / 64)
+            lngChar = lngValue - (64 * lngTemp)
+            str64 = Mid(B64, lngChar + 1, 1) & str64
+
+            str64 = Mid(B64, lngTemp + 1, 1) & str64
+
+            HexToBase64 = HexToBase64 & str64
+            j = 0
+            strWord = ""
+        End If
+    Next
+    ' Account for padding.
+    If (intTerm = 4) Then
+        HexToBase64 = Left(HexToBase64, Len(HexToBase64) - 1) & "="
+    End If
+    If (intTerm = 2) Then
+        HexToBase64 = Left(HexToBase64, Len(HexToBase64) - 2) & "=="
+    End If
+
+End Function
+
+Sub Syntax()
+    ' Subroutine to display syntax message.
+    Wscript.Echo "Syntax:"
+    Wscript.Echo "  cscript //nologo HexToBase64.vbs <hex string>"
+    Wscript.Echo "where:"
+    Wscript.Echo "  <hex string> is a string of bytes,"
+    Wscript.Echo "      each with two hexadecimal characters."
+    Wscript.Echo "For example:"
+    Wscript.Echo "  cscript //nologo HexToBase64.vbs 20413E0A0D"
+End Sub

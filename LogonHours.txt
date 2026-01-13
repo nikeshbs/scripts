@@ -1,0 +1,130 @@
+' LogonHours.vbs
+' VBScript program to document hours of the week when a given Active
+' Directory user is allowed to logon, using the logonHours attribute.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2002-2010 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - November 10, 2002
+' Version 1.1 - February 19, 2003 - Standardize Hungarian notation.
+' Version 1.2 - May 19, 2003 - Bug fixes.
+' Version 1.3 - January 25, 2004 - Modify error trapping.
+' Version 1.4 - November 6, 2010 - No need to set objects to Nothing.
+' Version 1.5 - September 19, 2012 - Modify rounding of local time
+'               zone bias to handle fractions of hour properly.
+'
+' This script is designed to be run at a command prompt, using the
+' Cscript host. For example:
+' cscript //nologo LogonHours.vbs DistinguishedName
+' DistinguishedName can be similar to:
+'     "cn=TestUser,ou=Sales,dc=MyDomain,dc=com"
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim objShell, lngBias, arrstrDayOfWeek, strUserDN
+Dim arrbytLogonHours(20)
+Dim arrintLogonHoursBits(167)
+Dim bytLogonHours, lngBiasKey
+Dim bytLogonHour, intLogonHour, strLine
+Dim objUser, k, intCounter, intLoopCounter, j, m
+
+' Check for required argument.
+If (Wscript.Arguments.Count = 0) Then
+    Wscript.Echo "Error, required argument missing."
+    Wscript.Echo "LogonHours.vbs"
+    Wscript.Echo "Program to document allowed logon hours"
+    Wscript.Echo "Syntax:"
+    Wscript.Echo "cscript LogonHours.vbs DN"
+    Wscript.Echo "where DN is the DistinguishedName of an AD user."
+    Wscript.Echo "For example, DN could be:"
+    Wscript.Echo "  cn=TestUser,ou=Sales,dc=MyDomain,dc=com"
+    Wscript.Quit(1)
+End If
+
+strUserDN = Wscript.Arguments(0)
+
+' Bind to the specified user object with the LDAP provider.
+On Error Resume Next
+Set objUser = GetObject("LDAP://" & strUserDN)
+If (Err.Number <> 0) Then
+    On Error GoTo 0
+    Wscript.Echo "User not found in Active Directory"
+    Wscript.Echo strUserDN
+    Wscript.Quit(1)
+End If
+On Error GoTo 0
+
+' Determine the time zone bias from the local registry.
+' This bias does not change with Daylight Savings Time.
+Set objShell = CreateObject("Wscript.Shell")
+lngBiasKey = objShell.RegRead("HKLM\System\CurrentControlSet\Control\" _
+    & "TimeZoneInformation\Bias")
+If (UCase(TypeName(lngBiasKey)) = "LONG") Then
+    lngBias = lngBiasKey
+ElseIf (UCase(TypeName(lngBiasKey)) = "VARIANT()") Then
+    lngBias = 0
+    For k = 0 To UBound(lngBiasKey)
+        lngBias = lngBias + (lngBiasKey(k) * 256^k)
+    Next
+End If
+' Modified September 19, 2012, to handle fractions of an hour properly.
+lngBias = Round((lngBias/60) + .1)
+
+arrstrDayOfWeek = Array("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")
+
+Wscript.Echo "User: " & objUser.name
+
+' Retrieve the user's logonHours attribute.
+objUser.GetInfoEx Array("logonHours"), 0
+bytLogonHours = objUser.Get("logonHours")
+
+' Populate a byte array.
+For k = 1 To LenB(bytLogonHours)
+    arrbytLogonHours(k - 1) = AscB(MidB(bytLogonHours, k, 1))
+Next
+
+' Populate a bit array, offset by the time zone bias.
+j = 0
+For Each bytLogonHour In arrbytLogonHours
+    For k = 7 To 0 Step -1
+        m = 8*j + k - lngBias
+        If (m < 0) Then
+            m = m + 168
+        End If
+        If (bytLogonHour And 2^k) Then
+            arrintLogonHoursBits(m) = 1
+        Else
+            arrintLogonHoursBits(m) = 0
+        End If
+    Next
+    j = j + 1
+Next
+
+' Output the bit array, one day per line, 24 hours per day.
+intCounter = 0
+intLoopCounter = 0
+Wscript.Echo "Day"
+Wscript.Echo "of   ------- Hour of the Day -------"
+Wscript.Echo "Week M-3 3-6 6-9 9-N N-3 3-6 6-9 9-M"
+For Each intLogonHour In arrintLogonHoursBits
+    If (intCounter = 0) Then
+        strLine = arrstrDayOfWeek(intLoopCounter) & "  "
+        intLoopCounter = intLoopCounter + 1
+    End If
+    strLine = strLine & intLogonHour
+    intCounter  = intCounter + 1
+    If (intCounter = 3) Or (intCounter = 6) Or (intCounter = 9) _
+            Or (intCounter = 12) Or (intCounter = 15) Or (intCounter = 18) _
+            Or (intCounter = 21) Then
+        strLine = strLine & " "
+    End If
+    If (intCounter = 24) Then
+        Wscript.Echo strLine
+        intCounter = 0
+    End If
+Next

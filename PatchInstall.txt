@@ -1,0 +1,356 @@
+' PatchInstall.vbs
+' Patch installation script for MS03-026 and MS03-039
+' (c) Microsoft 2003
+' v1.03 cl
+' Modified October 1, 2003 by Richard L. Mueller
+'     Converted to standard syntax and nomenclature.
+'     Explicitly declared all variables.
+'     Restored normal error handling, except where required.
+'     Log progress to a log file.
+'     Query user for text file with computer IP addresses.
+'     Query user for patch files for W2k, XP, and W2k3.
+'     Allow for no patch files for some clients.
+'     If drive Z: in use, try drive Y:.
+'     Allow files to be in any location, with any name.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2003-2010 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - October 1, 2003
+' Version 1.2 - January 25, 2004 - Modify error trapping.
+' Version 1.3 - November 6, 2010 - No need to set objects to Nothing.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim strIPFile, objNetwork, objFSO
+Dim objIPFile, strWinXP, strW2k, strW2k3
+Dim objLocal, strIP, objRemote
+Dim objSourceFile, intReturnCode
+Dim objProcess, objDestFile, intWaitTime
+Dim strLogFile, objLogFile
+Dim strTitle, strPatchW2k, strPatchXP, strPatchW2k3
+Dim objShell
+Dim strScriptPath, strScriptName, strScriptFolder
+Dim strText, intConstants, intAns, strDrive
+
+strTitle = "Network Patch Program"
+
+Set objNetwork = CreateObject("Wscript.Network")
+Set objFSO = CreateObject("Scripting.FileSystemObject")
+Set objShell = CreateObject("Wscript.Shell")
+
+' Determine local path.
+strScriptPath = Wscript.ScriptFullName
+strScriptName = Wscript.ScriptName
+strScriptFolder = Left(strScriptPath, Len(strScriptPath) _
+    - Len(strScriptName) - 1)
+
+If (Wscript.Arguments.Count > 0) Then
+    strIPFile = Wscript.Arguments(0)
+Else
+    strIPFile = InputBox("Enter the file of IP addresses of computers " _
+        & "to be patched. Include the path if the file is not in " _
+        & "the current folder.", strTitle)
+End If
+
+' Note that cim_datafile does not support UNC paths
+' so everything must be handled through mapped drives.
+If (Left(strIPFile, 2) = "\\") Then
+    Wscript.Echo "UNC paths not allowed, " _
+        & "please map a drive locally"
+    Wscript.Echo "Program aborted."
+    Wscript.Quit
+End If
+
+If (InStr(strIPFile, "\") = 0) Then
+    strIPFile = strScriptFolder & "\" & strIPFile
+End If
+
+' Verify that strIPFile is accessible.
+On Error Resume Next
+Set objIPFile = objFSO.OpenTextFile(strIPFile, 1, False)
+If (Err.Number <> 0) Then
+    On Error GoTo 0
+    Wscript.Echo "Cannot open file: " & strIPFile
+    Wscript.Echo "Program aborted."
+    Wscript.Quit
+End If
+On Error GoTo 0
+
+' Request W2k client patch file.
+strPatchW2k = InputBox("Enter the patch executable for Windows " _
+    & "2000 clients. Include the path if the file is not in " _
+    & "the current folder. Enter nothing if there are no " _
+    & "Windows 2000 clients to be patched.", strTitle)
+
+' Note that cim_datafile does not support UNC paths
+' so everything must be handled through mapped drives.
+If (Left(strPatchW2k, 2) = "\\") Then
+    Wscript.Echo "UNC paths not allowed, " _
+        & "please map a drive locally"
+    Wscript.Echo "Program aborted."
+    Wscript.Quit
+End If
+
+' Request XP client patch file.
+strPatchXP = InputBox("Enter the patch executable for Windows " _
+    & "XP clients. Include the path if the file is not in " _
+    & "the current folder. Enter nothing if there are no " _
+    & "Windows XP clients to be patched.", strTitle)
+
+' Note that cim_datafile does not support UNC paths
+' so everything must be handled through mapped drives.
+If (Left(strPatchXP, 2) = "\\") Then
+    Wscript.Echo "UNC paths not allowed, " _
+        & "please map a drive locally"
+    Wscript.Echo "Program aborted."
+    Wscript.Quit
+End If
+
+' Request W2k3 client patch file.
+strPatchW2k3 = InputBox("Enter the patch executable for Windows " _
+    & "Server 2003. Include the path if the file is not in " _
+    & "the current folder. Enter nothing if there are no " _
+    & "Windows Server 2003 machines to be patched.", strTitle)
+
+' Note that cim_datafile does not support UNC paths
+' so everything must be handled through mapped drives.
+If (Left(strPatchW2k3, 2) = "\\") Then
+    Wscript.Echo "UNC paths not allowed, " _
+        & "please map a drive locally"
+    Wscript.Echo "Program aborted."
+    Wscript.Quit
+End If
+
+On Error Resume Next
+If (InStr(strPatchW2k, "\") > 0) Then
+    strW2k = objFSO.GetFile(strPatchW2k).Name
+    If (strW2k <> "") Then
+        strW2k = strPatchW2k
+    End If
+Else
+    strW2k = objFSO.GetFile(strScriptFolder & "\" & strPatchW2k).Name
+    If (strW2k <> "") Then
+        strW2k = strScriptFolder & "\" & strPatchW2k
+    End If
+End If
+If (InStr(strPatchXP, "\") > 0) Then
+    strWinXP = objFSO.GetFile(strPatchXP).Name
+    If (strWinXP <> "") Then
+        strWinXP = strPatchXP
+    End If
+Else
+    strWinXP = objFSO.GetFile(strScriptFolder & "\" & strPatchXP).Name
+    If (strWinXP <> "") Then
+        strWinXP = strScriptFolder & "\" & strPatchXP
+    End If
+End If
+If (InStr(strPatchW2k3, "\") > 0) Then
+    strW2k3 = objFSO.GetFile(strPatchW2k3).Name
+    If (strW2k3 <> "") Then
+        strW2k3 = strPatchW2k3
+    End If
+Else
+    strW2k3 = objFSO.GetFile(strScriptFolder & "\" & strPatchW2k3).Name
+    If (strW2k3 <> "") Then
+        strW2k3 = strScriptFolder & "\" & strPatchW2k3
+    End If
+End If
+On Error GoTo 0
+
+strLogFile = strScriptFolder & "\Patch.log"
+strText = "IP addresses: " & strIPFile
+strText = strText & vbCrLf & "W2k patch: " & strW2k
+strText = strText & vbCrLf & "XP patch: " & strWinXP
+strText = strText & vbCrLf & "W2k3 patch: " & strW2k3
+strText = strText & vbCrLf & vbCrLf _
+    & "Click ""OK"" to continue or ""Cancel"" to abort."
+intConstants = vbOKCancel + vbInformation
+intAns = objShell.Popup(strText, , strTitle, intConstants)
+If (intAns = vbCancel) Then
+    Wscript.Echo "Program aborted."
+    Wscript.Quit
+End If
+
+' Open log file.
+Set objLogFile = objFSO.OpenTextFile(strLogFile, 8, True, 0)
+objLogFile.WriteLine "Start patching " & Now
+objLogFile.WriteLine "IP text file:                   " & strIPFile
+objLogFile.WriteLine "Windows 2000 patch file:        " & strW2k
+objLogFile.WriteLine "Windows XP patch file:          " & strWinXP
+objLogFile.WriteLine "Windows Server 2003 patch file: " & strW2k3
+
+Set objLocal = GetObject("winmgmts:root\cimv2")
+strDrive = "z:"
+
+Do Until objIPFile.AtEndOfStream
+    strIP = objIPFile.ReadLine
+    Wscript.Echo vbCrLf & "Connecting to " & strIP & "..."
+    ObjLogFile.WriteLine Now & " Connecting to " & strIP
+
+    On Error Resume Next
+    Set objRemote = GetObject("winmgmts:\\" & strIP & "\root\cimv2")
+
+    If (Err.Number <> 0) Then
+        On Error GoTo 0
+        Wscript.Echo "Failed to connect to " & strIP & "."
+        objLogFile.WriteLine "Failed to connect to " & strIP
+    Else
+        On Error GoTo 0
+
+        strCorrectPatch = DetectOS(objRemote)
+        If (strCorrectPatch <> "") Then
+            ' Lay the bits on the remote computer.
+            Wscript.Echo "Installing patch " & strCorrectPatch & "..."
+            objLogFile.WriteLine "Installing patch " & strCorrectPatch
+
+            On Error Resume Next
+            objNetwork.MapNetworkDrive strDrive, "\\" & strIP & "\C$"
+            If (Err.Number <> 0) Then
+                Err.Clear
+                objNetwork.RemoveNetworkDrive strDrive, True
+                If (Err.Number = 0) Then
+                    objNetwork.MapNetworkDrive strDrive, "\\" & strIP & "\C$"
+                    If (Err.Number <> 0) Then
+                        Err.Clear
+                        strDrive = "y:"
+                        objNetwork.MapNetworkDrive strDrive, "\\" & strIP & "\C$"
+                        If (Err.Number <> 0) Then
+                            On Error GoTo 0
+                            Wscript.Echo "Unable to map a drive to z: or y:."
+                            Wscript.Echo "Program aborted."
+                            objLogFile "Unable to map a drive to z: or y:."
+                            objLogFile "Program aborted at: " & Now
+                            objLogFile.Close
+                            Wscript.Quit
+                        End If
+                    End If
+                Else
+                    Err.Clear
+                    strDrive = "y:"
+                    objNetwork.MapNetworkDrive strDrive, "\\" & strIP & "\C$"
+                    If (Err.Number <> 0) Then
+                        On Error GoTo 0
+                        Wscript.Echo "Unable to map a drive to z: or y:."
+                        Wscript.Echo "Program aborted."
+                        objLogFile "Unable to map a drive to z: or y:."
+                        objLogFile "Program aborted at: " & Now
+                        objLogFile.Close
+                        Wscript.Quit
+                    End If
+                End If
+            End If
+            On Error GoTo 0
+            Set objSourceFile = objLocal.Get("cim_datafile=""" _
+                & Replace(strCorrectPatch, "\", "\\") & """")
+            intReturnCode = objSourceFile.Copy(strDrive & "\\Patchinst.exe")
+
+            If (intReturnCode <> 0) and (intReturnCode <> 10) Then
+                ' Failure detected and failure was not "file already exists."
+                Wscript.Echo "Failed copy to " & strIP & " - error: " _
+                    & intReturnCode
+                objLogFile.WriteLine "Failed to copy to  " & strIP _
+                    & " - error: " & intReturnCode
+            Else
+                Set objProcess = objRemote.Get("win32_process")
+     
+                ' Start the installation without user interaction,
+                ' and force a restart after completion.
+                intReturnCode = objProcess.Create("c:\\Patchinst.exe -q -f")
+                If (intReturnCode <> 0) Then
+                    Wscript.Echo "Failed to start process on " & strIP _
+                        & ": " & intReturnCode
+                    objLogFile.WriteLine "Failed to start process on " & strIP _
+                        & ": " & intReturnCode
+                Else
+                    ' Get a reference to the file that was copied.
+                    Set objDestFile = _
+                        objLocal.Get("cim_datafile=" & strDrive & "\\Patchinst.exe""")
+
+                    ' Wait for the installation to complete.
+                    For intWaitTime = 0 To 120     ' wait up to two minutes.
+                        Wscript.Sleep 1000     ' Sleep one second.
+                        ' Delete temporary file as soon as possible after freed.
+                        If (objDestFile.Delete() = 0) Then
+                            Exit For
+                        End If
+                    Next ' Otherwise, loop again and keep waiting...
+
+                    Wscript.Echo "Installation successful."
+                    objLogFile.WriteLine "Installation successful on " & strIP
+
+                End If     'Create process succeeded.
+            End If     'Copy succeeded.
+
+            objNetwork.RemoveNetworkDrive strDrive, True
+        End If      ' The script knows which patch to install.
+    End If ' Do the next IP address, Then the next IP address... 
+Loop
+
+objIPFile.Close()
+
+' Clean up, remove drive mapping.
+If (objFSO.FolderExists(strDrive & "\") = True) Then
+    objNetwork.RemoveNetworkDrive strDrive, True
+End If
+
+Wscript.Echo vbCrLf & "Patching complete. Exiting."
+objLogFile.WriteLine Now & " Patching complete"
+Wscript.Echo "Log written to " & strLogFile
+objLogFile.Close
+
+Function DetectOS(objRemote)
+    Dim objOSInfo, objOperatingSystem, strSystemType
+
+    Set objOSInfo = objRemote.InstancesOf("Win32_OperatingSystem")
+    ' Only one instance is ever returned (the currently active OS).
+    For Each objOperatingSystem In objOSInfo
+
+        If (objOperatingSystem.OSType <> 18) Then
+            ' Make sure that this computer is Windows NT-based.
+            Wscript.Echo strIP & " is not a Windows XP, Windows 2000, " _
+                & "or Windows 2003 Server computer."
+        Else
+            If (objOperatingSystem.Version = "5.0.2195") Then
+                ' Windows 2000 SP2, SP3, SP4.
+                If (objOperatingSystem.ServicePackMajorVersion = 2) _
+                        Or (objOperatingSystem.ServicePackMajorVersion = 3) _
+                        Or (objOperatingSystem.ServicePackMajorVersion = 4) Then
+                    strSystemType = strW2k
+                End If
+
+            ElseIf (objOperatingSystem.Version = "5.1.2600") Then
+                ' Windows XP RTM, SP1.
+                If (objOperatingSystem.ServicePackMajorVersion = 0) _
+                        Or (objOperatingSystem.ServicePackMajorVersion = 1) Then
+                    strSystemType = strWinXP
+                End If
+
+            ElseIf (objOperatingSystem.Version = "5.2.3790") Then
+                ' Windows Server 2003 RTM
+                If (objOperatingSystem.ServicePackMajorVersion = 0) Then
+                    strSystemType = strW2k3
+                End If
+            End If
+
+            If (strSystemType = "") Then 
+                ' This was a Windows NT-based computer,
+                ' but not with a valid service pack.
+                Wscript.Echo "Could not patch " & strIP _
+                    & " - unhandled OS version: " _
+                    & objOperatingSystem.Caption & " SP" _
+                    & objOperatingSystem.ServicePackMajorVersion _
+                    & "("& objOperatingSystem.Version & ")"
+            End If
+        End If
+
+    Next
+
+    DetectOS = strSystemType
+
+End Function

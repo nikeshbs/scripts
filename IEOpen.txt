@@ -1,0 +1,90 @@
+' IEOpen.vbs
+' VBScript program to use Microsoft Internet Explorer to display a file
+' open dialog and determine the file selected by the user.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2002-2010 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - November 11, 2002
+' Version 1.1 - February 19, 2003 - Standardize Hungarian notation.
+' Version 1.2 - January 25, 2004 - Modify error trapping.
+' Version 1.3 - November 6, 2010 - No need to set objects to Nothing.
+' Program uses Internet Explorer to display a file open dialog. The
+' program defaults to the current directory and displays files with
+' extention .xls. The program requires Microsoft Internet Explorer on
+' the client. The Wscript.Sleep command requires Windows Script Host
+' (WSH) 5.1 or greater. The program also demonstrates the use of the
+' WshShell Popup method to display a message box.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim objIE, objShell, strText, intConstants, strTitle, intAns
+Dim strScriptName, strScriptPath, strScriptFolder, strExcelPath
+
+strTitle = "Test Program"
+
+Set objShell = CreateObject("Wscript.Shell")
+
+' Bind to Internet Explorer application.
+' If IE not available, display a popup dialog box.
+On Error Resume Next
+Set objIE = CreateObject("InternetExplorer.Application")
+If (Err.Number <> 0) Then
+    On Error GoTo 0
+    strText = "Internet Explorer not installed on this computer."
+    strText = strText & vbCrLf _
+        & "This program requires Internet Explorer."
+    strText = strText & vbCrLf & vbCrLf & "Program aborted."
+    intConstants = vbOKOnly + vbCritical
+    intAns = objShell.Popup(strText, , strTitle, intConstants)
+    Wscript.Quit(1)
+End If
+On Error GoTo 0
+
+' Determine local path.
+strScriptPath = Wscript.ScriptFullName
+strScriptName = Wscript.ScriptName
+strScriptFolder = Left(strScriptPath, Len(strScriptPath) _
+    - Len(strScriptName) - 1)
+
+' Display file open dialog and select file.
+strExcelPath = SelectFile(strScriptFolder & "\*.xls")
+
+' Display file selected in a popup dialog box. The dialog box appears
+' for 20 seconds, or until the user presses "OK".
+If (strExcelPath = "") Then
+    strText = "No Spreadsheet file selected"
+    intConstants = vbOKOnly + vbExclamation
+    intAns = objShell.Popup(strText, 20, strTitle, intConstants)
+Else
+    strText = "Spreadsheet file selected"
+    strText = strText & vbCrLf & strExcelPath
+    intConstants = vbOKOnly + vbInformation
+    intAns = objShell.Popup(strText, 20, strTitle, intConstants)
+End If
+
+Function SelectFile(strFileSpec)
+    ' Function to display file open dialog and return selected file.
+    objIE.Navigate("about:blank")
+    Do Until objIE.ReadyState = 4
+        If (Wscript.Version > 5) Then
+            Wscript.Sleep 100
+        End If
+    Loop
+    objIE.Document.Write("<html><body><input id=file type=file></body></html>")
+    objIE.Document.all.file.focus
+    If (Wscript.Version > 5) Then
+        objShell.SendKeys strFileSpec & "{Tab}"
+        Wscript.Sleep 200
+    End If
+    objIE.Document.all.file.click
+    SelectFile = objIE.Document.all.file.value
+    If (SelectFile = strFileSpec) Then
+        SelectFile = ""
+    End If
+End Function

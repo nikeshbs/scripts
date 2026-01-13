@@ -1,0 +1,84 @@
+' DuplicateNames.vbs
+' VBScript program to find all users in Active Directory with Display
+' Names that are not unique.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2002-2010 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - November 10, 2002
+' Version 1.1 - February 19, 2003 - Standardize Hungarian notation.
+' Version 1.2 - March 11, 2003 - Remove SearchScope property.
+' Version 1.3 - July 6, 2007 - Modify use of Fields collection of
+'                              Recordset object.
+' Version 1.4 - November 6, 2010 - No need to set objects to Nothing.
+'
+' Program uses ADO to search Active Directory for all user objects. The
+' recordset is sorted by DisplayName and duplicate values are output.
+' The program is designed to run at a command prompt with the Cscript
+' host. The output can be redirected to a text file. For example:
+' cscript //nologo DuplicateNames.vbs > Duplicates.txt
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim objRootDSE, strDNSDomain, adoCommand, adoConnection, strQuery
+Dim adoRecordset, strName, strPreviousName, strDN, strPreviousPath
+Dim blnFlag, strBase, strFilter, strAttributes
+
+' Determine DNS domain name from RootDSE object.
+Set objRootDSE = GetObject("LDAP://RootDSE")
+strDNSDomain = objRootDSE.Get("defaultNamingContext")
+
+' Use ADO to search Active Directory.
+Set adoCommand = CreateObject("ADODB.Command")
+Set adoConnection = CreateObject("ADODB.Connection")
+adoConnection.Provider = "ADsDSOObject"
+adoConnection.Open "Active Directory Provider"
+adoCommand.ActiveConnection = adoConnection
+
+' Search for all user objects. Return DistinguishedName and DisplayName.
+' Sort recordset by DisplayName.
+strBase = "<LDAP://" & strDNSDomain & ">"
+strFilter = "(&(objectCategory=person)(objectClass=user))"
+strAttributes = "distinguishedName,displayName"
+strQuery = strBase & ";" & strFilter & ";" & strAttributes & ";subtree"
+adoCommand.CommandText = strQuery
+adoCommand.Properties("Page Size") = 100
+adoCommand.Properties("Timeout") = 30
+adoCommand.Properties("Cache Results") = False
+adoCommand.Properties("Sort On") = "displayName"
+Set adoRecordset = adoCommand.Execute
+If (adoRecordset.EOF = True) Then
+    Wscript.Echo "No duplicate display names found"
+    Wscript.Quit
+End If
+
+' Loop through all users. Display users with DisplayName that is not
+' unique.
+strPreviousName = ""
+strPreviousPath = ""
+blnFlag = False
+Do Until adoRecordset.EOF
+    strDN = adoRecordset.Fields("distinguishedName").Value
+    strName = adoRecordset.Fields("displayName").Value
+    If (strName = strPreviousName) Then
+        If (blnFlag = False) Then
+            Wscript.Echo strPreviousName & " ; " & strPreviousPath
+        End If
+        Wscript.Echo strName & " ; " & strDN
+        blnFlag = True
+    Else
+        blnFlag = False
+    End If
+    strPreviousName = strName
+    strPreviousPath = strDN
+    adoRecordset.MoveNext
+Loop
+adoRecordset.Close
+
+' Clean up.
+adoConnection.Close

@@ -1,0 +1,62 @@
+# PSPwdLastChanged.ps1
+# PowerShell script to determine when each user in the domain last
+# changed their password.
+#
+# ----------------------------------------------------------------------
+# Copyright (c) 2011 Richard L. Mueller
+# Hilltop Lab web site - http://www.rlmueller.net
+# Version 1.0 - March 23, 2011
+#
+# This program queries for the pwdLastSet attribute for every user in
+# the domain. The times are converted into local time and adjusted for
+# daylight savings time, as presently configured.
+#
+# You have a royalty-free right to use, modify, reproduce, and
+# distribute this script file in any way you find useful, provided that
+# you agree that the copyright owner above has no warranty, obligations,
+# or liability for such use.
+
+Trap {"Error: $_"; Break;}
+
+$D = [System.DirectoryServices.ActiveDirectory.Domain]::GetCurrentDomain()
+$Domain = [ADSI]"LDAP://$D"
+$Searcher = New-Object System.DirectoryServices.DirectorySearcher
+$Searcher.PageSize = 200
+$Searcher.SearchScope = "subtree"
+
+$Searcher.Filter = "(&(objectCategory=person)(objectClass=user))"
+$Searcher.PropertiesToLoad.Add("distinguishedName") > $Null
+$Searcher.PropertiesToLoad.Add("pwdLastSet") > $Null
+$Searcher.PropertiesToLoad.Add("userAccountControl") > $Null
+$Searcher.SearchRoot = "LDAP://" + $Domain.distinguishedName
+
+$Results = $Searcher.FindAll()
+ForEach ($Result In $Results)
+{
+    $DN = $Result.Properties.Item("distinguishedName")
+    $PLS = $Result.Properties.Item("pwdLastSet")
+    $UAC = $Result.Properties.Item("userAccountControl")
+    # Retrieve user password settings to check if password can expire.
+    $blnPwdExpires = -not (($UAC.Item(0) -band 64) -or ($UAC.Item(0) -band 65536))
+    If ($PLS.Count -eq 0)
+    {
+        $Date = [DateTime]0
+    }
+    Else
+    {
+        # Interpret 64-bit integer as a date.
+        $Date = [DateTime]$PLS.Item(0)
+    }
+    If ($Date -eq 0)
+    {
+        # 0 really means never.
+        $PwdLastSet = "<Never>"
+    }
+    Else
+    {
+        # Convert from .NET ticks to Active Directory Integer8 ticks.
+        # Also, convert from UTC to local time.
+        $PwdLastSet = $Date.AddYears(1600).ToLocalTime()
+    }
+    "$DN;$blnPwdExpires;$PwdLastSet"
+}

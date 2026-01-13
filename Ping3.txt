@@ -1,0 +1,63 @@
+' Ping3.vbs
+' VBScript program demonstrating how to ping remote computers to check
+' if they are available. The PingMachine function requires Windows XP.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2007-2010 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - January 2, 2007
+' Version 1.1 - November 6, 2010 - No need to set objects to Nothing.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim strComputer, objWMIService
+
+' Check for required argument.
+If (Wscript.Arguments.Count <> 1) Then
+    Wscript.Echo "Argument <ComputerName> required. For example" & vbCrLf _
+        & "cscript Ping3.vbs MyComputer"
+    Wscript.Quit
+End If
+
+' NetBIOS name of computer.
+strComputer = Wscript.Arguments(0)
+
+' Connect to WMI service on the local computer.
+Set objWMIService = GetObject("winmgmts:" _
+    & "{impersonationLevel=impersonate}!\\" _
+    & ".\root\cimv2")
+
+' Ping remote computer to see if online.
+If (PingMachine(strComputer) = True) Then
+    Wscript.Echo "Computer " & strComputer & " is available"
+Else
+    Wscript.Echo "Computer " & strComputer & " is NOT available"
+End If
+
+Function PingMachine(ByVal strHost)
+    ' Returns True if strHost can be pinged.
+    ' Variable objWMIService has global scope
+    ' and must be declared in the main program.
+
+    Dim colPings, objPing
+
+    Set colPings = objWMIService.ExecQuery _
+        ("SELECT * FROM Win32_PingStatus " _
+            & "WHERE Address = '" & strHost & "'")
+    For Each objPing In colPings
+        If objPing.StatusCode = 0 Then
+            ' Computer responded to ping.
+            PingMachine = True
+            Exit Function
+        Else
+            ' No reponse.
+            PingMachine = False
+        End If
+    Next
+
+End Function

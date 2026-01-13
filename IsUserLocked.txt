@@ -1,0 +1,209 @@
+' IsUserLocked.vbs
+' VBScript program to determine if user account locked out. If the
+' account is locked out, the program allows the user to unlock the
+' account.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2003 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - May 30, 2003
+' Version 1.1 - June 28, 2003 - Prompt to unlock account.
+' Version 1.2 - July 23, 2003 - Bug fixes.
+' Version 1.3 - January 25, 2004 - Modify error trapping.
+' Version 1.4 - March 18, 2004 - Modify NameTranslate constants.
+' Version 1.5 - July 31, 2007 - Escape any "/" characters in user DN.
+' Version 1.6 - December 29, 2009 - Modify Integer8Date function.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim objUser, objDomain, lngBias, objLockout, dtmLockout
+Dim objDuration, lngDuration, lngHigh, lngLow, dtmUnLock
+Dim strUserDN, strDNSDomain, strNetBIOSDomain, strUserNTName
+Dim objTrans, objShell, lngBiasKey, k, objRootDSE
+Dim strText, strTitle, intConstants, intAns
+
+' Constants for the NameTranslate object.
+Const ADS_NAME_INITTYPE_GC = 3
+Const ADS_NAME_TYPE_NT4 = 3
+Const ADS_NAME_TYPE_1779 = 1
+
+strTitle = "IsUserLocked"
+
+Set objShell = CreateObject("Wscript.Shell")
+
+' Request user sAMAccountName.
+strUserNTName = Trim(InputBox("Enter User ""pre-Windows 2000 Logon"" Name", "IsUserLocked"))
+If (strUserNTName = "") Then
+    strText = "Program Aborted"
+    intConstants = vbOKOnly + vbExclamation
+    intAns = objShell.Popup(strText, , strTitle, intConstants)
+    Wscript.Quit
+End If
+
+' Retrieve DNS domain name.
+Set objRootDSE = GetObject("LDAP://RootDSE")
+strDNSDomain = objRootDSE.Get("defaultNamingContext")
+
+' Convert DNS domain name to NetBIOS domain name.
+Set objTrans = CreateObject("NameTranslate")
+objTrans.Init ADS_NAME_INITTYPE_GC, ""
+objTrans.Set ADS_NAME_TYPE_1779, strDNSDomain
+strNetBIOSDomain = objTrans.Get(ADS_NAME_TYPE_NT4)
+' Remove trailing backslash.
+strNetBIOSDomain = Left(strNetBIOSDomain, Len(strNetBIOSDomain) - 1)
+
+' Convert user NT name to Distinguished Name.
+On Error Resume Next
+objTrans.Set ADS_NAME_TYPE_NT4, strNetBIOSDomain & "\" & strUserNTName
+If (Err.Number <> 0) Then
+    On Error GoTo 0
+    strText = "User " & strUserNTName & " not found"
+    strText = strText & vbCrLf & "Program aborted"
+    intConstants = vbOKOnly + vbCritical
+    intAns = objShell.Popup(strText, , strTitle, intConstants)
+    Wscript.Quit
+End If
+On Error GoTo 0
+strUserDN = objTrans.Get(ADS_NAME_TYPE_1779)
+
+' Escape any forward slash characters, "/", with the backslash
+' escape character. All other characters that should be escaped are.
+strUserDN = Replace(strUserDN, "/", "\/")
+
+' Bind to user object.
+On Error Resume Next
+Set objUser = GetObject("LDAP://" & strUserDN)
+If (Err.Number <> 0) Then
+    On Error GoTo 0
+    strText = "User " & strUserNTName & " not found"
+    strText = strText & vbCrLf & "DN: " & strUserDN
+    strText = strText & vbCrLf & "Program aborted"
+    intConstants = vbOKOnly + vbCritical
+    intAns = objShell.Popup(strText, , strTitle, intConstants)
+    Wscript.Quit
+End If
+On Error GoTo 0
+
+' Bind to domain.
+Set objDomain = GetObject("LDAP://" & strDNSDomain)
+
+' Obtain local Time Zone bias from machine registry.
+' This bias changes with Daylight Savings Time.
+lngBiasKey = objShell.RegRead("HKLM\System\CurrentControlSet\Control\" _
+    & "TimeZoneInformation\ActiveTimeBias")
+If (UCase(TypeName(lngBiasKey)) = "LONG") Then
+    lngBias = lngBiasKey
+ElseIf (UCase(TypeName(lngBiasKey)) = "VARIANT()") Then
+    lngBias = 0
+    For k = 0 To UBound(lngBiasKey)
+        lngBias = lngBias + (lngBiasKey(k) * 256^k)
+    Next
+End If
+
+' Retrieve user lockoutTime and convert to date.
+On Error Resume Next
+Set objLockout = objUser.lockoutTime
+If (Err.Number <> 0) Then
+    On Error GoTo 0
+    strText = "User " & strUserNTName & " is not locked out"
+    intConstants = vbOKOnly + vbInformation
+    intAns = objShell.Popup(strText, , strTitle, intConstants)
+    Wscript.Quit
+End If
+On Error GoTo 0
+
+dtmLockout = Integer8Date(objLockout, lngBias)
+If (dtmLockout = #1/1/1601#) Then
+    strText = "User " & strUserNTName & " is not locked out"
+    intConstants = vbOKOnly + vbInformation
+    intAns = objShell.Popup(strText, , strTitle, intConstants)
+    Wscript.Quit
+End If
+strText = "User " & strUserNTName & " locked out at: " & dtmLockout
+
+' Retrieve domain lockoutDuration policy.
+Set objDuration = objDomain.lockoutDuration
+lngHigh = objDuration.HighPart
+lngLow = objDuration.LowPart
+If (lngLow < 0) Then
+    lngHigh = lngHigh + 1
+End If
+lngDuration = lngHigh * (2^32) + lngLow
+lngDuration = -lngDuration/(60 * 10000000)
+strText = strText & vbCrLf & "Domain lockout duration (minutes): " _
+    & lngDuration
+
+' Determine if account still locked out.
+dtmUnLock = DateAdd("n", lngDuration, dtmLockout)
+If (Now() > dtmUnLock) Then
+    strText = strText & vbCrLf & "The account was unlocked at: " _
+        & dtmUnLock
+    intConstants = vbOKOnly + vbInformation
+    intAns = objShell.Popup(strText, , strTitle, intConstants)
+    Wscript.Quit
+Else
+    strText = strText & vbCrLf & "Account will unlock at: " & dtmUnLock
+    strText = strText & vbCrLf & "Click ""Yes"" to unlock account now"
+    strText = strText & vbCrLf & "Click ""No"" to leave account locked"
+    intConstants = vbYesNo + vbExclamation
+    intAns = objShell.Popup(strText, , strTitle, intConstants)
+    If (intAns = vbYes) Then
+        On Error Resume Next
+        objUser.IsAccountLocked = False
+        objUser.SetInfo
+        If (Err.Number <> 0) Then
+            On Error GoTo 0
+            strText = "Unable to unlock user " & strUserNTName
+            strText = "You may not have sufficient rights"
+            strText = "Program aborted"
+            intConstants = vbOKOnly + vbCritical
+            intAns = objShell.Popup(strText, , strTitle, intConstants)
+        Else
+            On Error GoTo 0
+            strText = "User " & strUserNTName & " unlocked"
+            intConstants = vbOKOnly + vbExclamation
+            intAns = objShell.Popup(strText, , strTitle, intConstants)
+        End If
+    ElseIf (intAns = vbNo) Then
+        strText = "User " & strUserNTName & " account left locked out"
+        intConstants = vbOKOnly + vbInformation
+        intAns = objShell.Popup(strText, , strTitle, intConstants)
+    Else
+        strText = "Program aborted"
+        strText = strText & vbCrLf & "User " & strUserNTName _
+            & " still locked out"
+        intConstants = vbOKOnly + vbExclamation
+        intAns = objShell.Popup(strText, , strTitle, intConstants)
+    End If
+End If
+
+Function Integer8Date(ByVal objDate, ByVal lngBias)
+    ' Function to convert Integer8 (64-bit) value to a date, adjusted for
+    ' local time zone bias.
+    Dim lngAdjust, lngDate, lngHigh, lngLow
+    lngAdjust = lngBias
+    lngHigh = objDate.HighPart
+    lngLow = objdate.LowPart
+    ' Account for error in IADsLargeInteger property methods.
+    If (lngLow < 0) Then
+        lngHigh = lngHigh + 1
+    End If
+    If (lngHigh = 0) And (lngLow = 0) Then
+        lngAdjust = 0
+    End If
+    lngDate = #1/1/1601# + (((lngHigh * (2 ^ 32)) _
+        + lngLow) / 600000000 - lngAdjust) / 1440
+    ' Trap error if lngDate is ridiculously huge.
+    On Error Resume Next
+    Integer8Date = CDate(lngDate)
+    If (Err.Number <> 0) Then
+        On Error GoTo 0
+        Integer8Date = #1/1/1601#
+    End If
+    On Error GoTo 0
+End Function

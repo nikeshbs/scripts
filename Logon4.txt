@@ -1,0 +1,122 @@
+' Logon4.vbs
+' VBScript logon script program.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2003-2010 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - March 11, 2003
+' Version 1.1 - April 18, 2003 - Remove trailing backslash from
+'                                strNetBIOSDomain.
+' Version 1.2 - June 10, 2003 - Map user home directory.
+' Version 1.4 - March 18, 2004 - Modify NameTranslate constants.
+' Version 1.5 - July 30, 2007 - Escape any "/" characters in DN's.
+' Version 1.6 - November 6, 2010 - No need to set objects to Nothing.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim objRootDSE, objTrans, strNetBIOSDomain, objNetwork, strNTName
+Dim strUserDN, strComputerDN, objUser, strDNSDomain
+Dim strComputer, objComputer, objGroup1, objGroup2
+Dim strHomeDrive, strHomeShare
+
+' Constants for the NameTranslate object.
+Const ADS_NAME_INITTYPE_GC = 3
+Const ADS_NAME_TYPE_NT4 = 3
+Const ADS_NAME_TYPE_1779 = 1
+
+Set objNetwork = CreateObject("Wscript.Network")
+
+' Loop required for Win9x clients during logon.
+strNTName = ""
+On Error Resume Next
+Do While strNTName = ""
+    strNTName = objNetwork.userName
+    Err.Clear
+    If (Wscript.Version > 5) Then
+        Wscript.Sleep 100
+    End If
+Loop
+On Error GoTo 0
+
+' Determine DNS domain name from RootDSE object.
+Set objRootDSE = GetObject("LDAP://RootDSE")
+strDNSDomain = objRootDSE.Get("defaultNamingContext")
+
+' Use the NameTranslate object to find the NetBIOS domain name from the
+' DNS domain name.
+Set objTrans = CreateObject("NameTranslate")
+objTrans.Init ADS_NAME_INITTYPE_GC, ""
+objTrans.Set ADS_NAME_TYPE_1779, strDNSDomain
+strNetBIOSDomain = objTrans.Get(ADS_NAME_TYPE_NT4)
+' Remove trailing backslash.
+strNetBIOSDomain = Left(strNetBIOSDomain, Len(strNetBIOSDomain) - 1)
+
+' Use the NameTranslate object to convert the NT user name to the
+' Distinguished Name required for the LDAP provider.
+objTrans.Set ADS_NAME_TYPE_NT4, strNetBIOSDomain & "\" & strNTName
+strUserDN = objTrans.Get(ADS_NAME_TYPE_1779)
+' Escape any forward slash characters, "/", with the backslash
+' escape character. All other characters that should be escaped are.
+strUserDN = Replace(strUserDN, "/", "\/")
+
+' Bind to the user object in Active Directory with the LDAP provider.
+Set objUser = GetObject("LDAP://" & strUserDN)
+
+' Map user home directory.
+strHomeShare = objUser.homeDirectory
+If (strHomeShare <> "") Then
+    strHomeDrive = objUser.homeDrive
+    If (strHomeDrive = "") Then
+        strHomeDrive = "H:"
+    End If
+    On Error Resume Next
+    objNetwork.MapNetworkDrive strHomeDrive, strHomeShare
+    If (Err.Number <> 0) Then
+        On Error GoTo 0
+        objNetwork.RemoveNetworkDrive strHomeDrive, True, True
+        objNetwork.MapNetworkDrive strHomeDrive, strHomeShare
+    End If
+    On Error GoTo 0
+End If
+
+' Bind to a group object in Active Directory with the LDAP provider.
+Set objGroup1 = GetObject("LDAP://cn=TestGroup,ou=Sales,dc=MyDomain,dc=com")
+
+' Map a network drive if the user is a member of the group.
+If (objGroup1.IsMember(objUser.AdsPath) = True) Then
+    On Error Resume Next
+    objNetwork.MapNetworkDrive "M:", "\\filesrv01\admin"
+    If (Err.Number <> 0) Then
+        On Error GoTo 0
+        objNetwork.RemoveNetworkDrive "M:", True, True
+        objNetwork.MapNetworkDrive "M:", "\\filesrv01\admin"
+    End If
+    On Error GoTo 0
+End If
+
+' Use the NameTranslate object to convert the NT name of the computer to
+' the Distinguished name required for the LDAP provider. Computer names
+' must end with "$".
+strComputer = objNetwork.ComputerName
+objTrans.Set ADS_NAME_TYPE_NT4, strNetBIOSDomain & "\" & strComputer & "$"
+strComputerDN = objTrans.Get(ADS_NAME_TYPE_1779)
+' Escape any forward slash characters, "/", with the backslash
+' escape character. All other characters that should be escaped are.
+strComputerDN = Replace(strComputerDN, "/", "\/")
+
+' Bind to the computer object in Active Directory with the LDAP
+' provider.
+Set objComputer = GetObject("LDAP://" & strComputerDN)
+
+' Bind to a group object in Active Directory with the LDAP provider.
+Set objGroup2 = GetObject("LDAP://cn=FrontOffice,ou=Sales,dc=MyDomain,dc=com")
+
+' Add a printer connection if the computer is a member of the group.
+If (objGroup2.IsMember(objComputer.AdsPath) = True) Then
+    objNetwork.AddPrinterConnection "LPT1:", "\\PrintServer\Printer3"
+End If

@@ -1,0 +1,110 @@
+' Logon1.vbs
+' VBScript logon script program.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2002-2010 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - November 10, 2002
+' Version 1.1 - February 19, 2003 - Standardize Hungarian notation.
+' Version 1.2 - June 10, 2003 - Map user home directory.
+'                               Do not test computer group membership.
+' Version 1.3 - January 25, 2004 - Modify error trapping.
+' Version 1.4 - November 6, 2010 - No need to set objects to Nothing.
+'
+' This program demonstrates how to bind to the user object, test for
+' user group membership, map network shares according to user group
+' membership, and connect shared printers. The IsMember function used
+' keeps track of user group memberships in a dictionary object. Since
+' the WinNT provider is used, the IsMember function reveals membership
+' in the "Primary Group", but does not reveal "Nested Group"
+' memberships. It cannot be used to test computer group membership. The
+' NetBIOS domain name is hardcoded.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim objGroupList, objUser, strGroup, objNetwork, strNTName
+Dim strNetBIOSDomain, strHomeDrive, strHomeShare
+
+' NetBIOS Domain name.
+strNetBIOSDomain = "MyDomain"
+
+Set objNetwork = CreateObject("Wscript.Network")
+
+' Loop required for Win9x clients during logon.
+strNTName = ""
+On Error Resume Next
+Do While strNTName = ""
+    strNTName = objNetwork.userName
+    Err.Clear
+    If (Wscript.Version > 5) Then
+        Wscript.Sleep 100
+    End If
+Loop
+On Error GoTo 0
+
+' Bind to the user object in Active Directory with the WinNT provider.
+Set objUser = GetObject("WinNT://" & strNetBIOSDomain & "/" _
+    & strNTName & ",user")
+
+' Map user home directory.
+strHomeShare = objUser.homeDirectory
+If (strHomeShare <> "") Then
+    strHomeDrive = objUser.homeDirDrive
+    If (strHomeDrive = "") Then
+        strHomeDrive = "H:"
+    End If
+    On Error Resume Next
+    objNetwork.MapNetworkDrive strHomeDrive, strHomeShare
+    If (Err.Number <> 0) Then
+        On Error GoTo 0
+        objNetwork.RemoveNetworkDrive strHomeDrive, True, True
+        objNetwork.MapNetworkDrive strHomeDrive, strHomeShare
+    End If
+    On Error GoTo 0
+End If
+
+' Map a drive if the user is a member of the group.
+strGroup = "Sales"
+If (IsMember(strGroup) = True) Then
+    On Error Resume Next
+    objNetwork.MapNetworkDrive "K:", "\\MyServer\MyShare"
+    If (Err.Number <> 0) Then
+        On Error GoTo 0
+        objNetwork.RemoveNetworkDrive "K:", True, True
+        objNetwork.MapNetworkDrive "K:", "\\MyServer\MyShare"
+    End If
+    On Error GoTo 0
+End If
+
+' Add the shared printer connection.
+objNetwork.AddPrinterConnection "LPT1:", "\\PrintServer\Printer1"
+
+Function IsMember(ByVal strGroup)
+    ' Function to test for user group membership.
+    ' strGroup is the NT name (sAMAccountName) of the group to test.
+    ' objGroupList is a dictionary object, with global scope.
+    ' Returns True if the user is a member of the group.
+
+    If (IsEmpty(objGroupList) = True) Then
+        Call LoadGroups
+    End If
+    IsMember = objGroupList.Exists(strGroup)
+End Function
+
+Sub LoadGroups
+    ' Subroutine to populate dictionary object with group memberships.
+    ' objUser is the user object, with global scope.
+    ' objGroupList is a dictionary object, with global scope.
+
+    Dim objGroup
+    Set objGroupList = CreateObject("Scripting.Dictionary")
+    objGroupList.CompareMode = vbTextCompare
+    For Each objGroup In objUser.Groups
+        objGroupList.Add objGroup.name, True
+    Next
+End Sub

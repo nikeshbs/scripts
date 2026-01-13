@@ -1,0 +1,73 @@
+' EnumDCs.vbs
+' VBScript program to enumerate all Domain Controllers in the domain.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2002 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - November 10, 2002
+' Version 1.1 - February 19, 2003 - Standardize Hungarian notation.
+' Version 1.2 - March 11, 2003 - Remove SearchScope property.
+' Version 1.3 - October 26, 2009 - Add serverReference property of DC.
+'
+' Program enumerates all Domain Controllers, their DNS host name, and
+' the name of the site they reside in.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim objRootDSE, strConfig, adoConnection, adoCommand, strQuery
+Dim adoRecordset, objDC, objSite, strBase, strFilter, strAttributes
+
+' Determine configuration context from RootDSE object.
+Set objRootDSE = GetObject("LDAP://RootDSE")
+strConfig = objRootDSE.Get("configurationNamingContext")
+
+' Use ADO to search Active Directory.
+Set adoCommand = CreateObject("ADODB.Command")
+Set adoConnection = CreateObject("ADODB.Connection")
+adoConnection.Provider = "ADsDSOObject"
+adoConnection.Open "Active Directory Provider"
+adoCommand.ActiveConnection = adoConnection
+
+' Search configuration container of Actice Directory.
+strBase = "<LDAP://" & strConfig & ">"
+
+' Filter on objects of class nTDSDSA.
+strFilter = "(objectClass=nTDSDSA)"
+
+' Comma delimited list of attribute values to retrieve.
+strAttributes = "ADsPath"
+
+' Construct the LDAP syntax query.
+strQuery = strBase & ";" & strFilter & ";" & strAttributes & ";subtree"
+
+adoCommand.CommandText = strQuery
+adoCommand.Properties("Page Size") = 100
+adoCommand.Properties("Timeout") = 30
+adoCommand.Properties("Cache Results") = False
+
+Set adoRecordset = adoCommand.Execute
+
+' The parent object of each object with objectClass=nTDSDSA is a Domain
+' Controller. The parent of each Domain Controller is a "Servers"
+' container, and the parent of this container is the "Site" container.
+Do Until adoRecordset.EOF
+    Set objDC = GetObject( _
+        GetObject(adoRecordset.Fields("AdsPath").Value).Parent)
+    Set objSite = GetObject(GetObject(objDC.Parent).Parent)
+    Wscript.Echo "Domain Controller: " & objDC.Get("Name") _
+        & vbCrLf & "  Distinguished Name: " & objDC.serverReference _
+        & vbCrLf & "  DNS Host Name: " & objDC.DNSHostName _
+        & vbCrLf & "  Site: " & objSite.name
+    adoRecordset.MoveNext
+Loop
+
+' Clean up.
+adoRecordset.Close
+adoConnection.Close
+
+Wscript.Echo "Done"

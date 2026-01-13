@@ -1,0 +1,350 @@
+' FindUser.vbs
+' VBScript program to prompt for user name and determine the computer
+' the user is logged into, by checking for the flag file created when
+' the user logged on.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2010 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - May 29, 2010
+' Version 1.1 - May 30, 2010 - Output file names found.
+' Version 1.2 - June 3, 2010
+' Version 1.3 - September 14, 2010 - Modify Ping function for IPv6.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim objFSO, objShell
+Dim strShare, strFlagFile, strComputer
+Dim objOldFile, strLine
+Dim strHexValue, strUserEncoded, strUserDN, objUser
+Dim objChars, arrValues, strFile, intResponse
+Dim strNTName, objRootDSE, strDNSDomain, objTrans, strNetBIOSDomain
+
+Const B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+Const ForReading = 1
+
+' Constants for the NameTranslate object.
+Const ADS_NAME_INITTYPE_GC = 3
+Const ADS_NAME_TYPE_NT4 = 3
+Const ADS_NAME_TYPE_1779 = 1
+
+' Specify shared folder.
+strShare = "\\MyServer\MyShare\Logs"
+
+' Prompt for user.
+strNTName = InputBox("Enter ""pre-Windows 2000 logon"" name of user", _
+    "FindUser")
+If (strNTName = "") Then
+    Wscript.Quit
+End If
+
+Set objFSO = CreateObject("Scripting.FileSystemObject")
+Set objShell = CreateObject("Wscript.Shell")
+
+' Determine DNS name of domain from RootDSE.
+Set objRootDSE = GetObject("LDAP://RootDSE")
+strDNSDomain = objRootDSE.Get("defaultNamingContext")
+
+' Use the NameTranslate object to find the NetBIOS domain name
+' from the DNS domain name.
+Set objTrans = CreateObject("NameTranslate")
+objTrans.Init ADS_NAME_INITTYPE_GC, ""
+objTrans.Set ADS_NAME_TYPE_1779, strDNSDomain
+strNetBIOSDomain = objTrans.Get(ADS_NAME_TYPE_NT4)
+' Remove trailing backslash.
+strNetBIOSDomain = Left(strNetBIOSDomain, Len(strNetBIOSDomain) - 1)
+
+' Use the Set method to specify the NT format of the object name.
+On Error Resume Next
+objTrans.Set ADS_NAME_TYPE_NT4, strNetBIOSDomain & "\" & strNTName
+If (Err.Number <> 0) Then
+    On Error GoTo 0
+    Wscript.Echo "User " & strNTName & " not found!"
+    Wscript.Quit
+Else
+    On Error GoTo 0
+    ' Use the Get method to retrieve the RFC 1779 Distinguished Name.
+    strUserDN = objTrans.Get(ADS_NAME_TYPE_1779)
+End If
+
+' Retrieve user GUID and base64 encode.
+Set objUser = GetObject("LDAP://" & strUserDN)
+
+strHexValue = TextToHex(objUser.GUID)
+strUserEncoded = HexToBase64(strHexValue)
+strUserEncoded = Replace(strUserEncoded, "=", "")
+
+' Flag file for this user.
+strFlagFile = strShare & "\" & strUserEncoded & ".log"
+
+' Setup dictionary object.
+Set objChars = CreateObject("Scripting.Dictionary")
+objChars.CompareMode = vbBinaryCompare
+' Load dictionary object.
+Call LoadChars
+
+' Check if flag file exists.
+If (objFSO.FileExists(strFlagFile) = True) Then
+    ' Read encoded computer name.
+    Set objOldFile = objFSO.OpenTextFile(strFlagFile, ForReading)
+    strLine = objOldFile.ReadLine
+    objOldFile.Close
+    ' Decode the computer name.
+    strHexValue = Base64ToHex(strLine)
+    strComputer = HexToText(strHexValue)
+    ' Parse flag file name for encoded user GUID value.
+    arrValues = Split(strFlagFile, "\")
+    strFile = arrValues(UBound(arrValues))
+    strFile = Left(strFile, InStr(strFile, ".") - 1)
+    ' Check if the computer responds to a ping.
+    If (IsConnectible(strComputer, 1, 750) = True) Then
+        intResponse = MsgBox("User " & strNTName & " logged onto computer " & strComputer _
+            & vbCrLf & "Computer " & strComputer & " is available" _
+            & vbCrLf & strFile _
+            & vbCrLf & "Delete the flag file?", vbYesNo + vbQuestion, "FindUser")
+    Else
+        intResponse = MsgBox("User " & strNTName & " logged onto computer " & strComputer _
+            & vbCrLf & "Computer " & strComputer & " is NOT available" _
+            & vbCrLf & strFile _
+            & vbCrLf & "Delete the flag file?", vbYesNo + vbQuestion, "FindUser")
+    End If
+    If (intResponse = vbYes) Then
+        objFSO.DeleteFile strFlagFile
+    End If
+Else
+    Wscript.Echo "User " & strNTName & " not logged on"
+End If
+
+Function TextToHex(ByVal strText)
+    ' Function to convert a text string into a string of hexadecimal bytes.
+    Dim strChar, k
+
+    TextToHex = ""
+    For k = 1 To Len(strText)
+        strChar = Mid(strText, k, 1)
+        TextToHex = TextToHex & Hex(Asc(strChar))
+    Next
+End Function
+
+Function HexToBase64(ByVal strHex)
+    ' Function to convert a hex string into a base64 encoded string.
+    ' Constant B64 has global scope.
+    Dim lngValue, lngTemp, lngChar, intLen, k, j, strWord, str64, intTerm
+
+    intLen = Len(strHex)
+
+    ' Pad with zeros to multiple of 3 bytes.
+    intTerm = intLen Mod 6
+    If (intTerm = 4) Then
+        strHex = strHex & "00"
+        intLen = intLen + 2
+    End If
+    If (intTerm = 2) Then
+        strHex = strHex & "0000"
+        intLen = intLen + 4
+    End If
+
+    ' Parse into groups of 3 hex bytes.
+    j = 0
+    strWord = ""
+    HexToBase64 = ""
+    For k = 1 To intLen Step 2
+        j = j + 1
+        strWord = strWord & Mid(strHex, k, 2)
+        If (j = 3) Then
+            ' Convert 3 8-bit bytes into 4 6-bit characters.
+            lngValue = CCur("&H" & strWord)
+
+            lngTemp = Fix(lngValue / 64)
+            lngChar = lngValue - (64 * lngTemp)
+            str64 = Mid(B64, lngChar + 1, 1)
+            lngValue = lngTemp
+
+            lngTemp = Fix(lngValue / 64)
+            lngChar = lngValue - (64 * lngTemp)
+            str64 = Mid(B64, lngChar + 1, 1) & str64
+            lngValue = lngTemp
+
+            lngTemp = Fix(lngValue / 64)
+            lngChar = lngValue - (64 * lngTemp)
+            str64 = Mid(B64, lngChar + 1, 1) & str64
+
+            str64 = Mid(B64, lngTemp + 1, 1) & str64
+
+            HexToBase64 = HexToBase64 & str64
+            j = 0
+            strWord = ""
+        End If
+    Next
+    ' Account for padding.
+    If (intTerm = 4) Then
+        HexToBase64 = Left(HexToBase64, Len(HexToBase64) - 1) & "="
+    End If
+    If (intTerm = 2) Then
+        HexToBase64 = Left(HexToBase64, Len(HexToBase64) - 2) & "=="
+    End If
+
+End Function
+
+Function HexToText(ByVal strHex)
+    ' Function to convert a string of hexadecimal bytes into a text string.
+    Dim strChar, k
+
+    HexToText = ""
+    For k = 1 To Len(strHex) Step 2
+        strChar = Mid(strHex, k, 2)
+        HexToText = HexToText & Chr("&H" & strChar)
+    Next
+End Function
+
+Function Base64ToHex(ByVal strValue)
+    ' Function to convert a base64 encoded string into a hex string.
+    Dim lngValue, lngTemp, lngChar, intLen, k, j, intTerm, strHex
+
+    intLen = Len(strValue)
+
+    ' Check padding.
+    intTerm = 0
+    If (Right(strValue, 1) = "=") Then
+        intTerm = 1
+    End If
+    If (Right(strValue, 2) = "==") Then
+        intTerm = 2
+    End If
+
+    ' Parse into groups of 4 6-bit characters.
+    j = 0
+    lngValue = 0
+    Base64ToHex = ""
+    For k = 1 To intLen
+        j = j + 1
+        ' Calculate 24-bit integer.
+        lngValue = (lngValue * 64) + objChars(Mid(strValue, k, 1))
+        If (j = 4) Then
+            ' Convert 24-bit integer into 3 8-bit bytes.
+            lngTemp = Fix(lngValue / 256)
+            lngChar = lngValue - (256 * lngTemp)
+            strHex = Right("00" & Hex(lngChar), 2)
+            lngValue = lngTemp
+
+            lngTemp = Fix(lngValue / 256)
+            lngChar = lngValue - (256 * lngTemp)
+            strHex = Right("00" & Hex(lngChar), 2) & strHex
+            lngValue = lngTemp
+
+            lngTemp = Fix(lngValue / 256)
+            lngChar = lngValue - (256 * lngTemp)
+            strHex = Right("00" & Hex(lngChar), 2) & strHex
+
+            Base64ToHex = Base64ToHex & strHex
+            j = 0
+            lngValue = 0
+        End If
+    Next
+    ' Account for padding.
+    Base64ToHex = Left(Base64ToHex, Len(Base64ToHex) - (intTerm * 2))
+
+End Function
+
+Sub LoadChars
+    ' Subroutine to load dictionary object with information to convert
+    ' Base64 characters into base 64 index integers.
+    ' Object reference objChars has global scope.
+
+    objChars.Add "A", 0
+    objChars.Add "B", 1
+    objChars.Add "C", 2
+    objChars.Add "D", 3
+    objChars.Add "E", 4
+    objChars.Add "F", 5
+    objChars.Add "G", 6
+    objChars.Add "H", 7
+    objChars.Add "I", 8
+    objChars.Add "J", 9
+    objChars.Add "K", 10
+    objChars.Add "L", 11
+    objChars.Add "M", 12
+    objChars.Add "N", 13
+    objChars.Add "O", 14
+    objChars.Add "P", 15
+    objChars.Add "Q", 16
+    objChars.Add "R", 17
+    objChars.Add "S", 18
+    objChars.Add "T", 19
+    objChars.Add "U", 20
+    objChars.Add "V", 21
+    objChars.Add "W", 22
+    objChars.Add "X", 23
+    objChars.Add "Y", 24
+    objChars.Add "Z", 25
+    objChars.Add "a", 26
+    objChars.Add "b", 27
+    objChars.Add "c", 28
+    objChars.Add "d", 29
+    objChars.Add "e", 30
+    objChars.Add "f", 31
+    objChars.Add "g", 32
+    objChars.Add "h", 33
+    objChars.Add "i", 34
+    objChars.Add "j", 35
+    objChars.Add "k", 36
+    objChars.Add "l", 37
+    objChars.Add "m", 38
+    objChars.Add "n", 39
+    objChars.Add "o", 40
+    objChars.Add "p", 41
+    objChars.Add "q", 42
+    objChars.Add "r", 43
+    objChars.Add "s", 44
+    objChars.Add "t", 45
+    objChars.Add "u", 46
+    objChars.Add "v", 47
+    objChars.Add "w", 48
+    objChars.Add "x", 49
+    objChars.Add "y", 50
+    objChars.Add "z", 51
+    objChars.Add "0", 52
+    objChars.Add "1", 53
+    objChars.Add "2", 54
+    objChars.Add "3", 55
+    objChars.Add "4", 56
+    objChars.Add "5", 57
+    objChars.Add "6", 58
+    objChars.Add "7", 59
+    objChars.Add "8", 60
+    objChars.Add "9", 61
+    objChars.Add "+", 62
+    objChars.Add "/", 63
+
+End Sub
+
+Function IsConnectible(ByVal strHost, ByVal intPings, ByVal intTO)
+    ' Returns True if strHost can be pinged.
+    ' strHost is the NetBIOS name or IP address of host computer.
+    ' intPings is number of echo requests to send.
+    ' intTO is timeout in milliseconds to wait for each reply.
+    ' Based on a program by Alex Angelopoulos and Torgeir Bakken,
+    ' as modified by Tom Lavedas.
+    ' Variable objShell has global scope and must be declared
+    ' and set in the main program.
+    ' Modified 09/14/2010 to search for "Reply from" instead of "TTL=".
+
+    Dim lngResult
+
+    lngResult = objShell.Run("%comspec% /c ping -n " & intPings _
+        & " -w " & intTO & " " & strHost _
+        & " | find ""Reply from"" > nul 2>&1", 0, True)
+
+    Select Case lngResult
+        Case 0
+            IsConnectible = True
+        Case Else
+            IsConnectible = False
+    End Select
+
+End Function

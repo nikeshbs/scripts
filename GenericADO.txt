@@ -1,0 +1,463 @@
+' GenericADO.vbs
+' VBScript program to use ADO to query Active Directory.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2009-2012 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - December 11, 2009
+' Version 1.1 - December 12, 2009
+' Version 1.2 - December 15, 2009
+' Version 1.3 - December 31, 2009
+' Version 1.4 - January 27, 2010 - Option to create csv file.
+' Version 1.5 - February 6, 2010 - Bug fix.
+' Version 1.6 - May 23, 2011 - Convert SID and GUID values.
+' Version 1.7 - April 21, 2012 - Handle more SID values.
+' Version 1.8 - September 19, 2012 - Handle logonHours.
+'
+' The program prompts for the DN of the base of the query, the LDAP
+' syntax filter, and a comma delimited list of attribute values to be
+' retrieved. Displays attribute values for objects matching filter in
+' base selected.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim adoCommand, adoConnection, strBase, strFilter, strAttributes
+Dim objRootDSE, strBaseDN, strQuery, adoRecordset
+Dim arrAttributes, k, intCount, strValue, strItem, strType
+Dim objValue, lngHigh, lngLow, lngValue, strAttr, dtmValue
+Dim objShell, lngBiasKey, lngBias, dtmDate, blnCSV, strLine
+Dim strMulti, strArg, lngLHBiasKey, lngLHBias
+
+blnCSV = False
+If (Wscript.Arguments.Count = 1) Then
+    strArg = Wscript.Arguments(0)
+    Select Case LCase(strArg)
+        Case "/csv"
+            blnCSV = True
+    End Select
+End If
+
+' Obtain local Time Zone bias from machine registry.
+Set objShell = CreateObject("Wscript.Shell")
+lngBiasKey = objShell.RegRead("HKLM\System\CurrentControlSet\Control\" _
+    & "TimeZoneInformation\ActiveTimeBias")
+If (UCase(TypeName(lngBiasKey)) = "LONG") Then
+    lngBias = lngBiasKey
+ElseIf (UCase(TypeName(lngBiasKey)) = "VARIANT()") Then
+    lngBias = 0
+    For k = 0 To UBound(lngBiasKey)
+        lngBias = lngBias + (lngBiasKey(k) * 256^k)
+    Next
+End If
+' Obtain local Time Zone bias for logonHours from machine registry.
+' This bias does not change with Daylight Savings Time.
+lngLHBiasKey = objShell.RegRead("HKLM\System\CurrentControlSet\Control\" _
+    & "TimeZoneInformation\Bias")
+If (UCase(TypeName(lngLHBiasKey)) = "LONG") Then
+    lngLHBias = lngLHBiasKey
+ElseIf (UCase(TypeName(lngLHBiasKey)) = "VARIANT()") Then
+    lngLHBias = 0
+    For k = 0 To UBound(lngLHBiasKey)
+        lngLHBias = lngLHBias + (lngLHBiasKey(k) * 256^k)
+    Next
+End If
+Set objShell = Nothing
+
+' Setup ADO objects.
+Set adoCommand = CreateObject("ADODB.Command")
+Set adoConnection = CreateObject("ADODB.Connection")
+adoConnection.Provider = "ADsDSOObject"
+adoConnection.Open "Active Directory Provider"
+adoCommand.ActiveConnection = adoConnection
+
+' Prompt for base of query.
+strBaseDN = Trim(InputBox("Specify DN of base of query, or blank for entire domain"))
+If (strBaseDN = "") Then
+    ' Search entire Active Directory domain.
+    Set objRootDSE = GetObject("LDAP://RootDSE")
+    strBaseDN = objRootDSE.Get("defaultNamingContext")
+End If
+If (InStr(LCase(strBaseDN), "dc=") = 0) Then
+    Set objRootDSE = GetObject("LDAP://RootDSE")
+    strBaseDN = strBaseDN & "," & objRootDSE.Get("defaultNamingContext")
+    strBaseDN = Replace(strBaseDN, ",,", ",")
+End If
+strBase = "<LDAP://" & strBaseDN & ">"
+
+' Prompt for filter.
+strFilter = Trim(InputBox("Enter LDAP syntax filter"))
+If (Left(strFilter, 1) <> "(") Then
+    strFilter = "(" & strFilter
+End If
+If (Right(strFilter, 1) <> ")") Then
+    strFilter = strFilter & ")"
+End If
+
+' Prompt for attributes.
+strAttributes = InputBox("Enter comma delimited list of attribute values to retrieve")
+strAttributes = Replace(strAttributes, " ", "")
+strAttr = strAttributes
+If (strAttributes = "") Then
+    strAttributes = "distinguishedName"
+Else
+    strAttributes = "distinguishedName" & "," & strAttributes
+End If
+arrAttributes = Split(strAttributes, ",")
+
+' Construct the LDAP syntax query.
+strQuery = strBase & ";" & strFilter & ";" & strAttributes & ";subtree"
+adoCommand.CommandText = strQuery
+adoCommand.Properties("Page Size") = 200
+adoCommand.Properties("Timeout") = 30
+adoCommand.Properties("Cache Results") = False
+
+If (blnCSV = False) Then
+    Wscript.Echo "Base of query: " & strBaseDN
+    Wscript.Echo "Filter: " & strFilter
+    Wscript.Echo "Attributes: " & strAttr
+Else
+    ' Output header line for csv.
+    strLine = "DN"
+    For k = 1 To UBound(arrAttributes)
+        strLine = strLine & "," & arrAttributes(k)
+    Next
+    Wscript.Echo strLine
+End If
+
+' Run the query.
+' Trap possible errors.
+On Error Resume Next
+Set adoRecordset = adoCommand.Execute
+If (Err.Number <> 0) Then
+    Select Case Err.Number
+        Case -2147217865
+            Wscript.Echo "Table does not exist. Base of search not found."
+        Case -2147217900
+            Wscript.Echo "One or more errors. Filter syntax error."
+        Case -2147467259
+            Wscript.Echo "Unspecified error. Invalid attribute name."
+        Case Else
+            Wscript.Echo "Error: " & Err.Number
+            Wscript.Echo "Description: " & Err.Description
+    End Select
+    Wscript.Quit
+End If
+On Error GoTo 0
+
+' Enumerate the resulting recordset.
+intCount = 0
+Do Until adoRecordset.EOF
+    ' Retrieve values and display.
+    intCount = intCount + 1
+    If (blnCSV = True) Then
+        strLine = """" & adoRecordset.Fields("distinguishedName").Value & """"
+    Else
+        Wscript.Echo "DN: " & adoRecordset.Fields("distinguishedName").Value
+    End If
+    For k = 1 To UBound(arrAttributes)
+        strType = TypeName(adoRecordset.Fields(arrAttributes(k)).Value)
+        If (strType = "Object") Then
+            Set objValue = adoRecordset.Fields(arrAttributes(k)).Value
+            lngHigh = objValue.HighPart
+            lngLow = objValue.LowPart
+            If (lngLow < 0) Then
+                lngHigh = lngHigh + 1
+            End If
+            lngValue = (lngHigh * (2 ^ 32)) + lngLow
+            If (lngValue > 120000000000000000) Then
+                dtmValue = #1/1/1601# + (lngValue/600000000 - lngBias)/1440
+                On Error Resume Next
+                dtmDate = CDate(dtmValue)
+                If (Err.Number <> 0) Then
+                    On Error GoTo 0
+                    If (blnCSV = True) Then
+                        strLine = StrLine & ",<Never>"
+                    Else
+                        Wscript.Echo "  " & arrAttributes(k) _
+                            & ": " & FormatNumber(lngValue, 0) _
+                            & " <Never>"
+                    End If
+                Else
+                    On Error GoTo 0
+                    If (blnCSV = True) Then
+                        strLine = strLine & "," & CStr(dtmDate)
+                    Else
+                        Wscript.Echo "  " & arrAttributes(k) _
+                            & ": " & FormatNumber(lngValue, 0) _
+                            & " (" & CStr(dtmDate) & ")"
+                    End If
+                End If
+            Else
+                If (blnCSV = True) Then
+                    strLine = strLine & ",""" & FormatNumber(lngValue, 0) & """"
+                Else
+                    Wscript.Echo "  " & arrAttributes(k) _
+                        & ": " & FormatNumber(lngValue, 0)
+                End If
+            End If
+        Else
+            strValue = adoRecordset.Fields(arrAttributes(k)).Value
+            Select Case strType
+                Case "String"
+                    If (blnCSV = True) Then
+                        strLine = strLine & ",""" & strValue & """"
+                    Else
+                        Wscript.Echo "  " & arrAttributes(k) _
+                            & ": " & strValue
+                    End If
+                Case "Variant()"
+                    strMulti = ""
+                    For Each strItem In strValue
+                        If (blnCSV = True) Then
+                            If (strMulti = "") Then
+                                strMulti = """" & strItem & """"
+                            Else
+                                strMulti = strMulti & ";""" & strItem & """"
+                            End If
+                        Else
+                            Wscript.Echo "  " & arrAttributes(k) _
+                                & ": " & strItem
+                        End If
+                    Next
+                    If (blnCSV = True) Then
+                        strLine = strLine & "," & strMulti
+                    End If
+                Case "Long"
+                    If (blnCSV = True) Then
+                        strLine = strLine & ",""" & FormatNumber(strValue, 0) & """"
+                    Else
+                        Wscript.Echo "  " & arrAttributes(k) _
+                            & ": " & FormatNumber(strValue, 0)
+                    End If
+                Case "Boolean"
+                    If (blnCSV = True) Then
+                        strLine = strLine & "," & CBool(strValue)
+                    Else
+                        Wscript.Echo "  " & arrAttributes(k) _
+                            & ": " & CBool(strValue)
+                    End If
+                Case "Date"
+                    If (blnCSV = True) Then
+                        strLine = strLine & "," & CDate(strValue)
+                    Else
+                        Wscript.Echo "  " & arrAttributes(k) _
+                            & ": " & CDate(strValue)
+                    End If
+                Case "Byte()"
+                    If (LCase(arrAttributes(k)) = "logonhours") Then
+                        ' The logonHours attribute.
+                        If (blnCSV = True) Then
+                            strLine = strLine & "," & OctetToHours(strValue)
+                        Else
+                            Wscript.Echo "  " & arrAttributes(k) _
+                                & ": " & OctetToHours(strValue)
+                        End If
+                    Else
+                        strItem = OctetToHexStr(strValue)
+                        If (InStr(UCase(arrAttributes(k)), "GUID") > 0) Then
+                            ' A GUID value.
+                            If (blnCSV = True) Then
+                                strLine = strLine & "," & HexGUIDToDisplay(strItem)
+                            Else
+                                Wscript.Echo "  " & arrAttributes(k) _
+                                    & ": " & HexGUIDToDisplay(strItem)
+                            End If
+                        ElseIf (Left(strItem, 6) = "010100") Or (Left(strItem, 6) = "010200") _
+                                Or (Left(strItem, 6) = "010400") Or (Left(strItem, 6) = "010500") Then
+                            ' A SID value.
+                            If (blnCSV = True) Then
+                                strLine = strLine & "," & HexSIDToDec(strItem)
+                            Else
+                                Wscript.Echo "  " & arrAttributes(k) _
+                                    & ": " & HexSIDToDec(strItem)
+                            End If
+                        Else
+                            ' Other OctetString value.
+                            If (blnCSV = True) Then
+                                strLine = strLine & "," & strItem
+                            Else
+                                Wscript.Echo "  " & arrAttributes(k) _
+                                    & ": " & strItem
+                            End If
+                        End If
+                    End If
+                Case "Null"
+                    If (blnCSV = True) Then
+                        strLine = strLine & ",<no value>"
+                    Else
+                        Wscript.Echo "  " & arrAttributes(k) _
+                            & ": <no value>"
+                    End If
+                Case Else
+                    If (blnCSV = True) Then
+                        strLine = strLine & ",<unsupported syntax>"
+                    Else
+                        Wscript.Echo "  " & arrAttributes(k) _
+                            & ": <unsupported syntax " & TypeName(strValue) & " >"
+                    End If
+            End Select
+        End If
+    Next
+    If (blnCSV = True) Then
+        Wscript.Echo strLine
+    End If
+    adoRecordset.MoveNext
+Loop
+If (blnCSV = False) Then
+    Wscript.Echo "Number of objects found: " & CStr(intCount)
+End If
+
+' Clean up.
+adoRecordset.Close
+adoConnection.Close
+
+Function OctetToHexStr(ByVal arrbytOctet)
+    ' Function to convert OctetString (byte array) to Hex string.
+
+    Dim k
+
+    OctetToHexStr = ""
+    For k = 1 To Lenb(arrbytOctet)
+        OctetToHexStr = OctetToHexStr _
+            & Right("0" & Hex(Ascb(Midb(arrbytOctet, k, 1))), 2)
+    Next
+
+End Function
+
+Function HexGUIDToDisplay(ByVal strHexGUID)
+    ' Function to convert GUID value in hex format to display format.
+
+    Dim TempGUID, GUIDStr
+
+    GUIDStr = Mid(strHexGUID, 7, 2)
+    GUIDStr = GUIDStr & Mid(strHexGUID, 5, 2)
+    GUIDStr = GUIDStr & Mid(strHexGUID, 3, 2)
+    GUIDStr = GUIDStr & Mid(strHexGUID, 1, 2)
+    GUIDStr = GUIDStr & Mid(strHexGUID, 11, 2)
+    GUIDStr = GUIDStr & Mid(strHexGUID, 9, 2)
+    GUIDStr = GUIDStr & Mid(strHexGUID, 15, 2)
+    GUIDStr = GUIDStr & Mid(strHexGUID, 13, 2)
+    GUIDStr = GUIDStr & Mid(strHexGUID, 17)
+
+    TempGUID = "{" & Mid(GUIDStr, 1, 8) & "-" & Mid(GUIDStr, 9, 4) _
+        & "-" & Mid(GUIDStr, 13, 4) & "-" & Mid(GUIDStr, 17, 4) _
+        & "-" & Mid(GUIDStr, 21, 15) & "}"
+
+    HexGUIDToDisplay = TempGUID
+
+End Function
+
+Function HexSIDToDec(ByVal strSID)
+    ' Function to convert most hex SID values to decimal format.
+
+    Dim arrbytSID, lngTemp, j
+
+    ReDim arrbytSID(Len(strSID)/2 - 1)
+    For j = 0 To UBound(arrbytSID)
+        arrbytSID(j) = CInt("&H" & Mid(strSID, 2*j + 1, 2))
+    Next
+
+    If (UBound(arrbytSID) = 11) Then
+        HexSIDToDec = "S-" & arrbytSID(0) & "-" _
+            & arrbytSID(1) & "-" & arrbytSID(8)
+
+        Exit Function
+    End If
+
+    If (UBound(arrbytSID) = 15) Then
+        HexSIDToDec = "S-" & arrbytSID(0) & "-" _
+            & arrbytSID(1) & "-" & arrbytSID(8)
+
+        lngTemp = arrbytSID(15)
+        lngTemp = lngTemp * 256 + arrbytSID(14)
+        lngTemp = lngTemp * 256 + arrbytSID(13)
+        lngTemp = lngTemp * 256 + arrbytSID(12)
+
+        HexSIDToDec = HexSIDToDec & "-" & CStr(lngTemp)
+
+        Exit Function
+    End If
+
+    HexSIDToDec = "S-" & arrbytSID(0) & "-" _
+        & arrbytSID(1) & "-" & arrbytSID(8)
+
+    lngTemp = arrbytSID(15)
+    lngTemp = lngTemp * 256 + arrbytSID(14)
+    lngTemp = lngTemp * 256 + arrbytSID(13)
+    lngTemp = lngTemp * 256 + arrbytSID(12)
+
+    HexSIDToDec = HexSIDToDec & "-" & CStr(lngTemp)
+
+    lngTemp = arrbytSID(19)
+    lngTemp = lngTemp * 256 + arrbytSID(18)
+    lngTemp = lngTemp * 256 + arrbytSID(17)
+    lngTemp = lngTemp * 256 + arrbytSID(16)
+
+    HexSIDToDec = HexSIDToDec & "-" & CStr(lngTemp)
+
+    lngTemp = arrbytSID(23)
+    lngTemp = lngTemp * 256 + arrbytSID(22)
+    lngTemp = lngTemp * 256 + arrbytSID(21)
+    lngTemp = lngTemp * 256 + arrbytSID(20)
+
+    HexSIDToDec = HexSIDToDec & "-" & CStr(lngTemp)
+
+    If (UBound(arrbytSID) > 23) Then
+        lngTemp = arrbytSID(27)
+        lngTemp = lngTemp * 256 + arrbytSID(26)
+        lngTemp = lngTemp * 256 + arrbytSID(25)
+        lngTemp = lngTemp * 256 + arrbytSID(24)
+
+        HexSIDToDec = HexSIDToDec & "-" & CStr(lngTemp)
+    End If
+
+End Function
+
+Function OctetToHours(ByVal bytLogonHours)
+    ' Function to convert Octet Value (byte array) into binary string
+    ' representing the logonHours attribute.
+    ' Variable lngLHBias must have global scope.
+
+    Dim k, arrbytLogonHours(20), j, bytLogonHour, m
+    Dim arrintLogonHoursBits(167), intCounter, intLogonHour
+
+    ' Populate a byte array.
+    For k = 1 To LenB(bytLogonHours)
+        arrbytLogonHours(k - 1) = AscB(MidB(bytLogonHours, k, 1))
+    Next
+
+    ' Populate a bit array, offset by time zone bias.
+    j = 0
+    For Each bytLogonHour In arrbytLogonHours
+        For k = 7 To 0 Step -1
+            m = 8*j + k - Round((lngLHBias/60) + 0.1)
+            If (m < 0) Then
+                m = m + 168
+            End If
+            If (bytLogonHour And 2^k) Then
+                arrintLogonHoursBits(m) = 1
+            Else
+                arrintLogonHoursBits(m) = 0
+            End if
+        Next
+        j = j + 1
+    Next
+    OctetToHours = ""
+    intCounter = 0
+    For Each intLogonHour In arrintLogonHoursBits
+        If (intCounter = 24) Then
+            OctetToHours = OctetToHours & "-"
+            intCounter = 0
+        End If
+        OctetToHours = OctetToHours & CStr(intLogonHour)
+        intCounter = intCounter + 1
+        If (intCounter = 8) Or (intCounter = 16) THen
+            OctetToHours = OctetToHours & "-"
+        End If
+    Next
+End Function

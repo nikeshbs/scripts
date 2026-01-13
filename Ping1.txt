@@ -1,0 +1,83 @@
+' Ping1.vbs
+' VBScript program demonstrating how to ping remote computers to check
+' if they are available. The IsConnectible function requires WSH 5.1.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2007-2010 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - January 2, 2007
+' Version 1.1 - September 14, 2010 - Modify Ping function for IPv6.
+' Version 1.2 - November 6, 2010 - No need to set objects to Nothing.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim strComputer, objShell, objFSO, strTemp, strTempFile
+
+' Check for required argument.
+If (Wscript.Arguments.Count <> 1) Then
+    Wscript.Echo "Argument <ComputerName> required. For example" & vbCrLf _
+        & "cscript Ping1.vbs MyComputer"
+    Wscript.Quit
+End If
+
+' NetBIOS name of computer.
+strComputer = Wscript.Arguments(0)
+
+Set objShell = CreateObject("Wscript.Shell")
+Set objFSO = CreateObject("Scripting.FileSystemObject")
+
+' Specify temporary file to save ping results.
+strTemp = objShell.ExpandEnvironmentStrings("%TEMP%")
+strTempFile = strTemp & "\RunResult.tmp"
+
+' Ping computer to see if online.
+If (IsConnectible(strComputer, 1, 750) = True) Then
+    Wscript.Echo "Computer " & strComputer & " is available"
+Else
+    Wscript.Echo "Computer " & strComputer & " is NOT available"
+End If
+
+' Clean up.
+If (objFSO.FileExists(strTempfile) = True) Then
+    objFSO.DeleteFile(strTempFile)
+End If
+
+Function IsConnectible(ByVal strHost, ByVal intPings, ByVal intTO)
+    ' Returns True if strHost can be pinged.
+    ' Based on a program by Alex Angelopoulos and Torgeir Bakken.
+    ' Variables strTempFile, objShell, and objFSO have global scope
+    ' and must be declared in the main program.
+    ' Modified 09/14/2010 to search for "Reply from" instead of "TTL=".
+    Dim objFile, strResults
+
+    If (intPings = "") Then
+        intPings = 2
+    End If
+    If (intTO = "") Then
+        intTO = 750
+    End If
+
+    Const OpenAsDefault = -2
+    Const FailIfNotExist = 0
+    Const ForReading = 1
+
+    objShell.Run "%comspec% /c ping -n " & intPings & " -w " & intTO _
+        & " " & strHost & ">" & strTempFile, 0, True
+
+    Set objFile = objFSO.OpenTextFile(strTempFile, ForReading, _
+        FailIfNotExist, OpenAsDefault)
+    strResults = objFile.ReadAll
+    objFile.Close
+
+    Select Case InStr(strResults, "Reply from")
+        Case 0
+            IsConnectible = False
+        Case Else
+            IsConnectible = True
+    End Select
+End Function

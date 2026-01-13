@@ -1,0 +1,67 @@
+# PSLastLogon2.ps1
+# PowerShell script to determine when each user in the domain last
+# logged on. Uses Get-ADDomainController and Get-ADUser, which requires
+# that all Domain Controllers in the domain be running on Windows Server
+# 2008 R2, with Active Directory Web Services running.
+#
+# ----------------------------------------------------------------------
+# Copyright (c) 2011 Richard L. Mueller
+# Hilltop Lab web site - http://www.rlmueller.net
+# Version 1.0 - March 17, 2011
+#
+# This program queries every Domain Controller in the domain to find the
+# largest (latest) value of the lastLogon attribute for each user. The
+# last logon dates for each user are converted into local time. The
+# times are adjusted for daylight savings time, as presently configured.
+#
+# You have a royalty-free right to use, modify, reproduce, and
+# distribute this script file in any way you find useful, provided that
+# you agree that the copyright owner above has no warranty, obligations,
+# or liability for such use.
+
+Trap {"Error: $_"; Break;}
+Set-StrictMode -Version latest
+
+# Create hash table of users and their last logon dates.
+$arrUsers = @{}
+
+# Enumerate every Domain Controller in the domain.
+$DCs = Get-ADDomainController -Filter *
+ForEach ($DC In $DCs) {
+    $Server = $DC.Name
+    # Retrieve DN and lastLogon for all users on this DC.
+    $Users = Get-ADUser -Filter * `
+        -Properties lastLogon, distinguishedName -Server $($Server)
+    ForEach ($User In $Users) {
+        $DN = $User.distinguishedName
+        $LL = $User.lastLogon
+        If ($LL -eq $Null)
+        {
+            $T = [Int64]0
+        }
+        Else
+        {
+            $T = [Int64]::Parse($LL)
+        }
+        $D = [DateTime]::FromFileTime($T)
+        If ($arrUsers.ContainsKey("$DN"))
+        {
+            If ($D -gt $arrUsers["$DN"])
+            {
+                $arrUsers["$DN"] = $D
+            }
+        }
+        Else
+        {
+            $arrUsers.Add("$DN", $D)
+        }
+    }
+}
+
+# Output latest last logon date for each user.
+$Users = $arrUsers.Keys
+ForEach ($DN In $Users)
+{
+    $Date = $arrUsers["$DN"]
+    "$DN;$Date"
+}

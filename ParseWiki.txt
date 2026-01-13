@@ -1,0 +1,189 @@
+' ParseWiki.vbs
+' VBScript program to parse TechNet Wiki Article HTML for heading
+' and anchor name tag problems.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2012 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - October 11, 2012
+' Version 1.1 - November 8, 2012 - Improve recognition of headings.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim strFile, objFSO, objFile, strText, objRE, objHeadings, objHeading
+Dim strHeading, objList, objRE2, objNames, objName, strName
+Dim strLeading, objTags, objTag, strTag, intCount, strHeading2
+Dim k, blnName, blnSpan, blnEndName, blnEndSpan, blnBlank, blnHeading
+Dim intIndex, strTemp
+
+Const ForReading = 1
+
+' Check for file or prompt.
+' This file should be a copy of the Wiki article HTML.
+If (Wscript.Arguments.Count = 0) Then
+    strFile = InputBox("Enter file name")
+    ' Check if user canceled.
+    If (strFile = "") Then
+        Wscript.Quit
+    End If
+Else
+    strFile = Wscript.Arguments(0)
+End If
+
+' Open the file.
+Set objFSO = CreateObject("Scripting.FileSystemObject")
+On Error Resume Next
+Set objFile = objFSO.OpenTextFile(strFile, ForReading)
+If (Err.Number <> 0) Then
+    Wscript.Echo "Unable to open file: " & strFile
+    Wscript.Echo "Error Number: " & Err.Number
+    Wscript.Echo "Description: " & Err.Description
+    Wscript.Quit
+End If
+On Error GoTo 0
+
+' Set up dictionary object.
+Set objList = CreateObject("Scripting.Dictionary")
+objList.CompareMode = vbTextCompare
+
+' Read the file contents. Convert to all lower case.
+strText = LCase(objFile.ReadAll)
+objFile.Close
+
+Set objRE = New RegExp
+objRE.Global = True
+Set objRE2 = New RegExp
+objRE2.Global = True
+
+' Parse headings.
+objRE.Pattern = "<h[0-9].*</h[0-9]>"
+Set objHeadings = objRE.Execute(strText)
+
+' Parse anchor name tags.
+objRE2.Pattern = "<a name=.*></a>"
+
+' Read file for headings and anchor name tags.
+Wscript.Echo "----- Analyze Headings"
+intCount = 0
+For Each objHeading In objHeadings
+    strHeading = objHeading.Value
+    ' Find anchor name tags in the heading.
+    Set objNames = objRE2.Execute(strHeading)
+    For Each objName  In objNames
+        strName = objName.Value
+        ' Check leading character of the anchor name tag.
+        strLeading = Mid(strName, 10, 1)
+        If (IsNumeric(strLeading) = True) Then
+            Wscript.Echo "## Leading digit in anchor name tag: " & strHeading
+            intCount = intCount + 1
+        End If
+        ' Check for embedded "0" characters in the anchor name tag.
+        If (InStr(strName, "0") > 0) Then
+            ' Remove any duplicate <a name>...</a> anchor tags for readability.
+            intIndex = InStr(strName, "</a>")
+            strTemp = Left(strName, intIndex + 3)
+            ' "0" characters are only a problem in the first <a name> tag.
+            If (InStr(strTemp, "0") > 0) Then
+                Wscript.Echo "## Embedded ""0"" in name tag: " _
+                    & Replace(strHeading, strName, strTemp)
+                intCount = intCount + 1
+            End If
+        End If
+        ' Check for duplicate anchor name tags.
+        If (objList.Exists(strName) = False) Then
+            objList.Add strName, True
+        Else
+            Wscript.Echo "## Duplicate anchor name tag: " & strHeading
+            intCount = intCount + 1
+        End If
+    Next
+    ' Check for blank heading (no characters outside name or span tags).
+    blnName = False
+    blnSpan = False
+    blnEndName = False
+    blnEndSpan = False
+    blnHeading = True
+    blnBlank = True
+    ' Ignore spaces when looking for blanks.
+    strHeading2 = Replace(strHeading, "&nbsp;", "")
+    For k = 1 to Len(strHeading)
+        If (blnHeading = False) Then
+            If (Mid(strHeading2, k, 3) = "</h") Then
+                Exit For
+            End If
+            If (blnName = True) And (Mid(strHeading2, k, 1) = ">") Then
+                blnName = False
+            End If
+            If (Mid(strHeading2, k, 8) = "<a name=") Then
+                blnName = True
+            End If
+            If (blnSpan = True) And (Mid(strHeading2, k, 1) = ">") Then
+                blnSpan = False
+            End If
+            If (Mid(strHeading2, k, 12) = "<span style=") Then
+                blnSpan = True
+            End If
+            If (blnEndName = True) And (Mid(strHeading2, k, 1) = ">") Then
+                blnEndName = False
+            End If
+            If (Mid(strHeading2, k, 4) = "</a>") Then
+                blnEndName = True
+            End If
+            If (blnEndSpan = True) And (Mid(strHeading2, k, 1) = ">") Then
+                blnEndSpan = False
+            End If
+            If (Mid(strHeading2, k, 7) = "</span>") Then
+                blnEndSpan = True
+            End If
+            If (blnName = False) And (blnSpan = False) _
+                    And (blnEndName = False) And (blnEndSpan = False) Then
+                If (Mid(strHeading2, k, 1) <> ">") Then
+                    blnBlank = False
+                    Exit For
+                End If
+            End If
+        End If
+        If (blnHeading = True) And (Mid(strHeading2, k, 1) = ">") Then
+            blnHeading = False
+        End If
+    Next
+    If (blnBlank = True) Then
+       Wscript.Echo "## Blank heading: " & strHeading
+        intCount = intCount + 1
+    End If
+Next
+Wscript.Echo "Number of problems in headings: " & CStr(intCount)
+
+' Read all anchor name tags in the file.
+Wscript.Echo "----- Analyze Anchor Name Tags"
+intCount = 0
+objList.RemoveAll
+Set objTags = objRE2.Execute(strText)
+For Each objTag In objTags
+    strTag = objTag.Value
+    ' Check for duplicates.
+    If (objList.Exists(strTag) = False) Then
+        objList.Add strTag, True
+    Else
+        Wscript.Echo "## Duplicate anchor name tag: " & strTag
+        intCount = intCount + 1
+    End If
+    ' Check for embedded "0" characters in the anchor name tag.
+    If (InStr(strTag, "0") > 0) Then
+        ' Remove any duplicate <a name>...</a> anchor tags for readability.
+        intIndex = InStr(strTag, "</a>")
+        strTemp = Left(strTag, intIndex + 3)
+        ' "0" characters are only a problem in the first <a name> tag.
+        If (InStr(strTemp, "0") > 0) Then
+            Wscript.Echo "## Embedded ""0"" in name tag: " & strTemp
+            intCount = intCount + 1
+        End If
+    End If
+
+Next
+Wscript.Echo "Number of problems in anchor name tags: " & CStr(intCount)

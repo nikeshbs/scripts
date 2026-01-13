@@ -1,0 +1,110 @@
+' IEDisplay.vbs
+' VBScript program to use Microsoft Internet Explorer to display a
+' dynamic dialog box indicating program progress.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2002-2010 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - November 11, 2002
+' Version 1.1 - February 19, 2003 - Standardize Hungarian notation.
+' Version 1.2 - November 6, 2010 - No need to set objects to Nothing.
+' Program uses Internet Explorer to display a dialog box whose message
+' changes to reflect progress in the program. The user can abort the
+' program by closing the dialog box. The program requires Microsoft
+' Internet Explorer on the client. The Wscript.Sleep command requires
+' Windows Script Host (WSH) 5.1 or greater.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim objIE, objShell, k, strIETitle, blnFlag
+
+' Set IE display box title. Dashes ("-") are to move the Microsoft title
+' appended to the title we specify out of view.
+' blnFlag is set to False when the user closes the IE display box.
+strIETitle = "Test Program" & String(40, "-")
+blnFlag = True
+
+Set objShell = CreateObject("WScript.Shell")
+
+' Initialize display box with initial message
+InitIE "Program Initializing"
+
+' Display progress with counter.
+' Program can be aborted by closing the display box.
+Wscript.Sleep 2000
+For k = 0 To 10
+    MsgIE "Iteration " & k & vbCrLf & "To abort, close this box"
+    Wscript.Sleep 1000
+    If (blnFlag = False) Then
+        Wscript.Echo "Program Aborted after " & k & " iterations"
+        Wscript.Quit
+    End If
+Next
+MsgIE "Loop complete"
+
+' Display final message
+Wscript.Sleep 2000
+MsgIE "Program Finished"
+
+If (blnFlag = False) Then
+    Wscript.Echo "Program Aborted after iterations complete"
+    Wscript.Quit
+End If
+
+' Close display box
+Wscript.Sleep 2000
+MsgIE "IE_Quit"
+
+Wscript.Echo "Done"
+
+Sub MsgIE(ByVal strMsg)
+    ' Subroutine to display message in IE box and detect when the
+    ' box is closed by the program or the user.
+    On Error Resume Next
+    If (strMsg = "IE_Quit") Then
+        blnFlag = False
+        objIE.Quit
+    Else
+        objIE.Document.Body.InnerText = strMsg
+        If (Err.Number <> 0) Then
+            Err.Clear
+            blnFlag = False
+            Exit Sub
+        End If
+        objShell.AppActivate strIETitle
+    End If
+End Sub
+
+Sub InitIE(ByVal strMsg)
+    ' Subroutine to initialize the IE display box.
+    Dim intWidth, intHeight, intWidthW, intHeightW
+    Set objIE = CreateObject("InternetExplorer.Application")
+    objIE.ToolBar = False
+    objIE.StatusBar = False
+    objIE.Resizable = False
+    objIE.Navigate("about:blank")
+    Do Until objIE.readyState = 4
+        Wscript.Sleep 100
+    Loop
+    intWidth = objIE.document.ParentWindow.Screen.AvailWidth
+    intHeight = objIE.document.ParentWindow.Screen.AvailHeight
+    intWidthW = objIE.document.ParentWindow.Screen.AvailWidth * .40
+    intHeightW = objIE.document.ParentWindow.Screen.AvailHeight * .05
+    objIE.document.ParentWindow.resizeto intWidthW, intHeightW
+    objIE.document.ParentWindow.moveto (intWidth - intWidthW)/2, (intHeight - intHeightW)/2
+    objIE.document.Write "<html><body> " & strMsg & " </body></html>"
+    objIE.document.ParentWindow.document.body.style.backgroundcolor = "LightBlue"
+    objIE.document.ParentWindow.document.body.scroll="no"
+    objIE.document.ParentWindow.document.body.style.Font = "10pt 'Courier New'"
+    objIE.document.ParentWindow.document.body.style.borderStyle = "outset"
+    objIE.document.ParentWindow.document.body.style.borderWidth = "4px"
+    objIE.document.Title = strIETitle
+    objIE.Visible = True
+    Wscript.Sleep 100
+    objShell.AppActivate strIETitle
+End Sub

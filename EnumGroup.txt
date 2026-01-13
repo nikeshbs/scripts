@@ -1,0 +1,124 @@
+' EnumGroup.vbs
+' VBScript program to document members of a group.
+' Reveals nested group and primary group membership.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2002-2010 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - December 10, 2002
+' Version 1.1 - January 24, 2003 - Include users whose Primary Group is
+'                                  any nested group.
+' Version 1.2 - February 19, 2003 - Standardize Hungarian notation.
+' Version 1.3 - March 11, 2003 - Remove SearchScope property.
+' Version 1.4 - April 30, 2003 - Use GetInfoEx to retrieve group
+'                                primaryGroupToken.
+' Version 1.5 - January 25, 2004 - Modify error trapping.
+' Version 1.6 - November 6, 2010 - No need to set objects to Nothing.
+' Version 1.7 - March 26, 2011 - Output DN instead of sAMAccountName.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim objGroup, strDN, objMemberList
+Dim adoConnection, adoCommand, objRootDSE, strDNSDomain
+
+' Dictionary object to track group membership.
+Set objMemberList = CreateObject("Scripting.Dictionary")
+objMemberList.CompareMode = vbTextCompare
+
+' Check for required argument.
+If (Wscript.Arguments.Count < 1) Then
+    Wscript.Echo "Required argument <Distinguished Name> " _
+        & "of group missing."
+    Wscript.Echo "For example:" & vbCrLf _
+        & "cscript //nologo EnumGroup.vbs " _
+        & """cn=Test Group,ou=Sales,dc=MyDomain,dc=com"""
+    Wscript.Quit(0)
+End If
+
+' Bind to the group object with the LDAP provider.
+strDN = Wscript.Arguments(0)
+On Error Resume Next
+Set objGroup = GetObject("LDAP://" & strDN)
+If (Err.Number <> 0) Then
+    On Error GoTo 0
+    Wscript.Echo "Group not found" & vbCrLf & strDN
+    Wscript.Quit(1)
+End If
+On Error GoTo 0
+
+' Retrieve DNS domain name from RootDSE.
+Set objRootDSE = GetObject("LDAP://RootDSE")
+strDNSDomain = objRootDSE.Get("defaultNamingContext")
+
+' Setup ADO.
+Set adoConnection = CreateObject("ADODB.Connection")
+Set adoCommand = CreateObject("ADODB.Command")
+adoConnection.Provider = "ADsDSOObject"
+adoConnection.Open "Active Directory Provider"
+Set adoCommand.ActiveConnection = adoConnection
+adoCommand.Properties("Page Size") = 100
+adoCommand.Properties("Timeout") = 30
+adoCommand.Properties("Cache Results") = False
+
+' Enumerate group membership.
+Wscript.Echo "Members of group " & objGroup.distinguishedName
+Call EnumGroup(objGroup, "  ")
+
+' Clean Up.
+adoConnection.Close
+
+Sub EnumGroup(ByVal objADGroup, ByVal strOffset)
+    ' Recursive subroutine to enumerate group membership.
+    ' objMemberList is a dictionary object with global scope.
+    ' objADGroup is a group object bound with the LDAP provider.
+    ' This subroutine outputs a list of group members, one member
+    ' per line. Nested group members are included. Users are also
+    ' included if their primary group is objADGroup. objMemberList
+    ' prevents an infinite loop if nested groups are circular.
+
+    Dim strFilter, strAttributes, adoRecordset, intGroupToken
+    Dim objMember, strQuery, strDN
+
+    ' Retrieve "primaryGroupToken" of group.
+    objADGroup.GetInfoEx Array("primaryGroupToken"), 0
+    intGroupToken = objADGroup.Get("primaryGroupToken")
+
+    ' Use ADO to search for users whose "primaryGroupID" matches the
+    ' group "primaryGroupToken".
+    strFilter = "(primaryGroupID=" & intGroupToken & ")"
+    strAttributes = "distinguishedName"
+    strQuery = "<LDAP://" & strDNSDomain & ">;" & strFilter & ";" _
+        & strAttributes & ";subtree"
+    adoCommand.CommandText = strQuery
+    Set adoRecordset = adoCommand.Execute
+    Do Until adoRecordset.EOF
+        strDN = adoRecordset.Fields("distinguishedName").Value
+        If (objMemberList.Exists(strDN) = False) Then
+            objMemberList.Add strDN, True
+            Wscript.Echo strOffset & strDN & " (Primary)"
+        Else
+            Wscript.Echo strOffset & strDN & " (Primary, Duplicate)"
+        End If
+        adoRecordset.MoveNext
+    Loop
+    adoRecordset.Close
+
+    For Each objMember In objADGroup.Members
+        If (objMemberList.Exists(objMember.distinguishedName) = False) Then
+            objMemberList.Add objMember.distinguishedName, True
+            If (UCase(Left(objMember.objectCategory, 8)) = "CN=GROUP") Then
+                Wscript.Echo strOffset & objMember.distinguishedName & " (Group)"
+                Call EnumGroup(objMember, strOffset & "  ")
+            Else
+                Wscript.Echo strOffset & objMember.distinguishedName
+            End If
+        Else
+            Wscript.Echo strOffset & objMember.distinguishedName & " (Duplicate)"
+        End If
+    Next
+End Sub

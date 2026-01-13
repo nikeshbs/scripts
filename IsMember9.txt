@@ -1,0 +1,174 @@
+' IsMember9.vbs
+' VBScript program demonstrating the use of Function IsMember.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2004 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - April 22, 2004
+' Version 1.1 - June 3, 2004 - Bug fix.
+' Version 1.2 - April 5, 2007 - Retrieve NetBIOS name of domain from
+'               wshNetwork. Document global variables.
+' Version 1.3 - July 31, 2007 - Escape any "/" characters in DN's.
+' Version 1.4 - August 3, 2008 - Skip local implicit groups.
+' A VBScript program demonstrating how to test for membership in a local
+' group on the computer. The function reveals direct membership in the
+' local group, membership by local group nesting, membership in the
+' local group due to membership in a domain group that is a member of
+' the local group, and membership due to domain group nesting.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim objNetwork, strNTUser, objLocalGroup, objUser
+
+' These attributes must be declared in the main program,
+' so they are global in scope.
+Dim objTrans, strUserDN, strComputer, strNetBIOSDomain
+
+' Constants for the NameTranslate object.
+Const ADS_NAME_INITTYPE_GC = 3
+Const ADS_NAME_TYPE_NT4 = 3
+Const ADS_NAME_TYPE_1779 = 1
+
+' Determine domain user NT name and netBIOS name of the local computer
+' and the domain.
+Set objNetwork = CreateObject("Wscript.Network")
+strNTUser = objNetwork.UserName
+strComputer = objNetwork.ComputerName
+strNetBIOSDomain = objNetwork.UserDomain
+Set objNetwork = Nothing
+
+' Bind to local Administrators group.
+Set objLocalGroup = GetObject("WinNT://" & strComputer _
+    & "/Administrators,group")
+
+' Bind to the domain user object.
+Set objUser = GetObject("WinNT://" & strNetBIOSDomain _
+    & "/" & strNTUser & ",user")
+
+' Check for membership in local group.
+If (IsMember(objLocalGroup, objUser) = True) Then
+    Wscript.Echo "User " & strNTUser _
+        & " is a member of the local group " & objLocalGroup.Name
+Else
+    Wscript.Echo "User " & strNTUser _
+        & " is NOT a member of the local group " & objLocalGroup.Name
+End If
+
+Function IsMember(ByVal objGroup, ByVal objDomainUser)
+    ' Function to determine if objDomainUser is a member
+    ' of local group objGroup. The variable strComputer has
+    ' global scope.
+
+    Dim objMember
+
+    ' Enumerate direct members of objGroup.
+    For each objMember In objGroup.Members
+        ' Test if objDomainUser is objMember.
+        If (LCase(objMember.AdsPath) = LCase(objDomainUser.AdsPath)) Then
+            IsMember = True
+            Exit Function
+        End If
+        ' Test if objMember is a group.
+        If (LCase(objMember.Class) = "group") Then
+            ' Test if objMember is a local group.
+            If (InStr(LCase(objMember.AdsPath), "/" _
+                    & LCase(strComputer) & "/") > 0) Then
+                ' Call function recursively to check if objDomainUser is a
+                ' member of local group objMember.
+                IsMember = IsMember(objMember, objDomainUser)
+                If (IsMember = True) Then
+                    Exit Function
+                End If
+            ElseIf (InStr(LCase(objMember.AdsPath), _
+                    "/nt authority/") > 0) Then
+                ' objMember is local implicit group (special identity).
+                ' Membership cannot be enumerated.
+            Else
+                ' objMember is a domain group. Check membership with a function
+                ' that uses the LDAP provider, so that nested group membership
+                ' is revealed. objMember is bound with the WinNT provider.
+                IsMember = IsDomainMember(objMember, objDomainUser, True)
+                If (IsMember = True) Then
+                    Exit Function
+                End If
+            End If
+        End If
+    Next
+    IsMember = False
+End Function
+
+Function IsDomainMember(ByVal objDomainGroup, ByVal objDomainUser, ByVal blnNT)
+    ' Function to determine if objDomainUser is a member
+    ' of domain group objDomainGroup. blnNT is True if objDomainGroup
+    ' was bound with WinNT, False if bound with LDAP.
+    ' The variables objTrans, strUserDN, and strNetBIOSDomain have global scope.
+
+    Dim arrstrNTNames(1), arrstrDNSNames
+    Dim strGroupDN, objGroup, objMember
+
+    ' Check if this function called before.
+    If (IsEmpty(objTrans) = True) Then
+        ' Setup NameTranslate to convert NT names of group and user
+        ' to Distinguished Names required by the LDAP provider.
+        Set objTrans = CreateObject("NameTranslate")
+        objTrans.Init ADS_NAME_INITTYPE_GC, ""
+        arrstrNTNames(0) = strNetBIOSDomain & "\" & objDomainGroup.Name
+        arrstrNTNames(1) = strNetBIOSDomain & "\" & objDomainUser.Name
+        objTrans.SetEx ADS_NAME_TYPE_NT4, arrstrNTNames
+        arrstrDNSNames = objTrans.GetEx(ADS_NAME_TYPE_1779)
+        strGroupDN = arrstrDNSNames(0)
+        strUserDN = arrstrDNSNames(1)
+        ' Escape any forward slash characters, "/", with the backslash
+        ' escape character. All other characters that should be escaped are.
+        strGroupDN = Replace(strGroupDN, "/", "\/")
+        strUserDN = Replace(strUserDN, "/", "\/")
+    Else
+        ' NameTranslate already setup. Check if objDomainGroup
+        ' bound with WinNT.
+        If (blnNT = True) Then
+            ' Convert objDomainGroup NT name to Distinguished Name
+            ' required by the LDAP provider.
+            objTrans.Set ADS_NAME_TYPE_NT4, strNetBIOSDomain _
+                & "\" & objDomainGroup.Name
+            strGroupDN = objTrans.Get(ADS_NAME_TYPE_1779)
+            ' Escape any forward slash characters, "/", with the backslash
+            ' escape character. All other characters that should be escaped are.
+            strGroupDN = Replace(strGroupDN, "/", "\/")
+        Else
+            ' objDomainGroup bound with LDAP. Retrieve Distinguished Name.
+            strGroupDN = objDomainGroup.distinguishedName
+            ' Escape any forward slash characters, "/", with the backslash
+            ' escape character. All other characters that should be escaped are.
+            strGroupDN = Replace(strGroupDN, "/", "\/")
+        End If
+    End If
+    ' Bind to group with the LDAP provider, if required.
+    If (blnNT = True) Then
+        Set objGroup = GetObject("LDAP://" & strGroupDN)
+    Else
+        Set objGroup = objDomainGroup
+    End If
+    ' Enumerate direct members of objDomainGroup (bound with LDAP).
+    For Each objMember In objGroup.Members
+        ' Check if objMember is objDomainUser (strUserDN).
+        If (LCase(objMember.distinguishedName) = LCase(strUserDN)) Then
+            IsDomainMember = True
+            Exit Function
+        End If
+        ' Check if objMember is a group.
+        If (LCase(objMember.Class) = "group") Then
+            ' Call function recursively. objMember bound with LDAP.
+            IsDomainMember = IsDomainMember(objMember, objDomainUser, False)
+            If (IsDomainMember = True) Then
+                Exit Function
+            End If
+        End If
+    Next
+    IsDomainMember = False
+
+End Function

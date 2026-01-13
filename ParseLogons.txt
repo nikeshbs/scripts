@@ -1,0 +1,121 @@
+' ParseLogons.vbs
+' VBScript program to parse log files created by logon and logoff
+' scripts similar to Logon5.vbs. The program outputs one line for each
+' session with the computer and user names, logon date/time, logoff
+' date/time, and the difference in hours, minutes, and seconds.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2009 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - May 5, 2009
+' Version 1.1 - November 4, 2010
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim strLogFile, objFSO, objLog, strLine, arrValues
+Dim strAction, strDate, strComputer, strUser
+Dim objUserList, intDuration, intHr, intMin, strSec, strSession
+
+Const ForReading = 1
+
+' Specify the shared logfile.
+strLogFile = "\\MyServer\LogFile\Domain.log"
+
+' Dictionary object of user sessions and logon dates.
+Set objUserList = CreateObject("Scripting.Dictionary")
+objUserList.CompareMode = vbTextCompare
+
+' Open the log file for read access.
+Set objFSO = CreateObject("Scripting.FileSystemObject")
+Set objLog = objFSO.OpenTextFile(strLogFile, ForReading)
+
+' Output header line.
+Wscript.Echo "User Session,Logon,Logoff,Duration (hh:mm:ss)"
+
+' Read each line of the log file.
+Do Until objLog.AtEndOfStream
+    strLine = Trim(objLog.ReadLine)
+    ' Skip blank lines.
+    If (strLine <> "") Then
+        ' Parse the line into semicolon delimited fields.
+        arrValues = Split(strLine, ";")
+        ' There should be at least 4 fields in each line.
+        If (UBound(arrValues) > 2) Then
+            ' Retrieve values.
+            strAction = Trim(arrValues(0))
+            strDate = Trim(arrValues(1))
+            strComputer = Trim(arrValues(2))
+            strUser = Trim(arrValues(3))
+            ' Track user sessions by a combination of the
+            ' computer and user names.
+            strSession = strComputer & "\" & strUser
+            ' Check if this line logs a logon or logoff event.
+            If (strAction = "Logon") Then
+               ' Check if the last event for this session was a logon.
+                If (objUserList.Exists(strSession) = True) Then
+                    ' Logoff event missing for previous logon event.
+                    Wscript.Echo strSession & "," _
+                        & objUserList(strSession) _
+                        & ",<unknown>,<unknown>"
+                End If
+                ' Track this session and logon time
+                ' in the dictionary object.
+                objUserList(strSession) = strDate
+            End If
+            If (strAction = "Logoff") Then
+                ' Check if the last event for this session was a logon.
+                If (objUserList.Exists(strSession) = True) Then
+                    ' Calculate how long the user was logged on.
+                    intDuration = (CDate(strDate) _
+                        - CDate(objUserList(strSession)))
+                    intDuration = intDuration * 24
+                    intHr = Fix(intDuration)
+                    intMin = Fix((intDuration - intHr) * 60)
+                    strSec = FormatNumber((((intDuration _
+                        - intHr) * 60) - intMin) * 60, 0)
+                    If (strSec = "60") Then
+                        intMin = intMin + 1
+                        strSec = "00"
+                    End If
+                    If (intMin = 60) Then
+                        intHr = intHr + 1
+                        intMin = 0
+                    End If
+                    ' Output logon and logoff times and duration
+                    ' for this session.
+                    Wscript.Echo strSession & "," _
+                        & objUserList(strSession) _
+                        & "," & strDate & "," _
+                        & Right("0" & CStr(intHr), 2) _
+                        & ":" & Right("0" & CStr(intMin), 2) _
+                        & ":" & Right("0" & strSec, 2)
+                    ' Remove entry for this session from dictionary
+                    ' object to indicate the user is no longer logged on
+                    ' to this computer.
+                    objUserList.Remove(strSession)
+                Else
+                    ' Previous logon event missing.
+                    Wscript.Echo strSession & ",<unknown>" _
+                        & "," & strDate & ",<unknown>"
+                End If
+            End If
+        Else
+            ' Wrong number of fields.
+            Wscript.Echo "Bad line: " & strLine
+        End If
+    End If
+Loop
+
+' Loop through users still logged on at this time.
+For Each strSession In objUserList.Keys
+    Wscript.Echo strSession & "," & objUserList(strSession) _
+        & ",<still logged on>,<unknown>"
+Next
+
+' Clean up.
+objLog.Close

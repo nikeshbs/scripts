@@ -1,0 +1,128 @@
+' Logon9.vbs
+' VBScript logon script program.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2010 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - March 27, 2010
+' Version 1.1 - April 1, 2010 - Bug fix.
+'
+' VBScript logon script to log date, user name, and computer name
+' to a shared log file, and also display the previous logon date
+' (and the computer used) to the user.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim objFSO, objWriteLog, objNetwork, objShell, strText, intAns
+Dim intConstants, intTimeout, strTitle, intCount, blnLog
+Dim strUserName, strComputerName, strShare, strLogFile
+Dim objReadLog, dtmLastLogon, strLastComputer, arrValues
+
+Const ForReading = 1
+Const ForAppending = 8
+Const CreateIfNotExist = True
+Const OpenAsASCII = 0
+
+' Specify the share and log file name.
+strShare = "\\MyServer\MyShare"
+strLogFile = "Domain.log"
+
+' Specify parameters for Popup method.
+intTimeout = 20
+strTitle = "Logon Script"
+
+Set objFSO = CreateObject("Scripting.FileSystemObject")
+Set objNetwork = CreateObject("Wscript.Network")
+Set objShell = CreateObject("Wscript.Shell")
+
+' Retrieve the current user name and the local computer name.
+strUserName = objNetwork.UserName
+strComputerName = objNetwork.ComputerName
+
+If (objFSO.FolderExists(strShare) = True) Then
+    ' Read file to find last logon recorded for this user.
+    dtmLastLogon = "<Not known>"
+    strLastComputer = "<Not known>"
+    ' Trap error if file does not yet exist.
+    On Error Resume Next
+    Set objReadLog = objFSO.OpenTextFile(strShare & "\" _
+        & strLogFile, ForReading)
+    If (Err.Number = 0) Then
+        On Error GoTo 0
+        ' Read each line of the file. Retain information from
+        ' the last line that records a logon for this user.
+        Do Until objReadLog.AtEndOfStream
+            ' Read semicolon delimited values in each line into an array.
+            arrValues = Split(objReadLog.ReadLine, ";")
+            ' There must be at least 4 values in the array.
+            If (UBound(arrValues) > 2) Then
+                ' Find the last "Logon" line for this user.
+                If (arrValues(0) = "Logon") _
+                        And (LCase(arrValues(3)) = LCase(strUserName)) Then
+                    dtmLastlogon = arrValues(1)
+                    strLastComputer = arrValues(2)
+                End If
+            End If
+        Loop
+        objReadLog.Close
+    End If
+    On Error GoTo 0
+    ' Alert user about their last logon.
+    strText = "Your last logon was at" _
+        & vbCrLf & dtmLastLogon _
+        & vbCrLf & "on computer" _
+        & vbCrLf & strLastComputer
+    intConstants = vbOKOnly + vbInformation
+    intAns = objShell.Popup(strText, intTimeout, strTitle, intConstants)
+    ' Open the file to append a line.
+    ' Trap the error if the user lacks permission.
+    On Error Resume Next
+    Set objWriteLog = objFSO.OpenTextFile(strShare & "\" _
+        & strLogFile, ForAppending, CreateIfNotExist, OpenAsASCII)
+    If (Err.Number = 0) Then
+        ' Make three attempts to write to the log file.
+        intCount = 1
+        blnLog = False
+        Do Until intCount = 3
+            objWriteLog.WriteLine "Logon;"  & Now() & ";" _
+                & strComputerName & ";" & strUserName
+            If (Err.Number = 0) Then
+                blnLog = True
+                Exit Do
+            Else
+                Err.Clear
+                intCount = intCount + 1
+                If (Wscript.Version > 5) Then
+                    Wscript.Sleep 200
+                End If
+            End If
+        Loop
+        On Error GoTo 0
+        objWriteLog.Close
+        If (blnLog = False) Then
+            strText = "Log cannot be written." _
+                & vbCrlf & "Another process may have log file open."
+            intConstants = vbOKOnly + vbExclamation
+            intAns = objShell.Popup(strText, intTimeout, strTitle, _
+                intConstants)
+        End If
+    Else
+        On Error GoTo 0
+        strText = "Log cannot be written to" _
+            & vbCrLf & strShare & "\" & strLogFile _
+            & vbCrLf & "User may not have permissions."
+        intConstants = vbOKOnly + vbCritical
+        intAns = objShell.Popup(strText, intTimeout, strTitle, intConstants)
+    End If
+Else
+    strText = "Log cannot be accessed. Log folder" _
+        & vbCrLf & strShare _
+        & vbCrLf & "does not exist or is not shared."
+    intConstants = vbOKOnly + vbCritical
+    intAns = objShell.Popup(strText, intTimeout, strTitle, intConstants)
+End If

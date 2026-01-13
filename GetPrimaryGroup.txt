@@ -1,0 +1,104 @@
+' GetPrimaryGroup.vbs
+' VBScript program determine the primary group of a user.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2002-2010 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - November 10, 2002
+' Version 1.1 - February 13, 2003
+' Version 1.2 - February 19, 2003 - Standardize Hungarian notation.
+' Version 1.3 - January 25, 2004 - Modify error trapping.
+' Version 1.4 - July 6, 2007 - Modify use of Fields collection of
+'                              Recordset object.
+' Version 1.5 - November 6, 2010 - No need to set objects to Nothing.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim objUserWinNT, intGroupID, strFilter, strAttributes, objRootDSE
+Dim strDNSDomain, adoConnection, adoCommand, strQuery, adoRecordset
+Dim intGroupToken, strGroupName, strUserNTName, objGroup
+
+' Check for required argument.
+If (Wscript.Arguments.Count < 1) Then
+    Wscript.Echo "Required argument <Domain/NT Name> missing. " _
+        & "For example:" _
+        & vbCrLf & "cscript GetPrimaryGroup.vbs MyDomain/TestUser"
+    Wscript.Quit(0)
+End If
+
+strUserNTName = Wscript.Arguments(0)
+
+' Bind to the user object with the WinNT provider.
+On Error Resume Next
+Set objUserWinNT = GetObject("WinNT://" & strUserNTName & ",user")
+If (Err.Number <> 0) Then
+    On Error GoTo 0
+    Wscript.Echo "User not found" & vbCrLf & strUserNTName
+    Wscript.Quit(1)
+End If
+On Error GoTo 0
+
+' Retrieve primary group ID of the user. To determine which group this
+' corresponds to we must determine which group has a matching
+' PrimaryGroupToken. However, this attribute is calculated and not
+' stored in Active Directory.
+intGroupID = objUserWinNT.primaryGroupID
+
+' Search for groups the user is a member of. The user's primary group
+' is one of these groups. Retrieve each groups primaryGroupToken. This
+' forces Active Directory to calculate the primaryGroupToken. Rather
+' than working with all groups in the domain, we only query the groups
+' we know the user is a member of.
+strFilter = "(|"
+For Each objGroup in objUserWinNT.Groups
+    strFilter = strFilter & "(sAMAccountName=" & objGroup.name & ")"
+Next
+strFilter = strFilter & ")"
+strAttributes = "sAMAccountName,primaryGroupToken"
+
+' Determine DNS domain name from the RootDSE object.
+Set objRootDSE = GetObject("LDAP://RootDSE")
+strDNSDomain = objRootDSE.Get("defaultNamingContext")
+
+' Use ADO to search Active Directory for the groups.
+Set adoConnection = CreateObject("ADODB.Connection")
+Set adoCommand = CreateObject("ADODB.Command")
+adoConnection.Provider = "ADsDSOObject"
+adoConnection.Open "Active Directory Provider"
+Set adoCommand.ActiveConnection = adoConnection
+
+strQuery = "<LDAP://" & strDNSDomain & ">;" & strFilter & ";" _
+    & strAttributes & ";subtree"
+adoCommand.CommandText = strQuery
+adoCommand.Properties("Page Size") = 100
+adoCommand.Properties("Timeout") = 30
+adoCommand.Properties("Cache Results") = False
+
+Set adoRecordset = adoCommand.Execute
+If (adoRecordset.EOF = True) Then
+    Wscript.Echo "No Primary Group found"
+    adoRecordset.Close
+    adoConnection.Close
+    Wscript.Quit(1)
+End If
+
+' Enumerate the groups the user is a member of and find the one whose
+' primaryGroupToken matches the user's primaryGroupID.
+Do Until adoRecordset.EOF
+    intGroupToken = adoRecordset.Fields("primaryGroupToken").Value
+    If (intGroupToken = intGroupID) Then
+        strGroupName = adoRecordset.Fields("sAMAccountName").Value
+        Wscript.Echo "Primary Group: " & strGroupName
+        Exit Do
+    End If
+    adoRecordset.MoveNext
+Loop
+adoRecordset.Close
+
+' Clean up.
+adoConnection.Close

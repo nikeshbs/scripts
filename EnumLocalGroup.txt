@@ -1,0 +1,136 @@
+' EnumLocalGroup.vbs
+' VBScript program to enumerate members of a local group.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2007 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - April 5, 2007
+' Version 1.1 - July 31, 2007 - Escape any "/" characters in group DN's.
+' Version 1.2 - July 22, 2008 - Skip local implicit groups.
+' A VBScript program demonstrating how to enumerate members of a local
+' group. Reveals direct membership in the local group, membership in
+' nested local groups, membership in domain groups that are members of
+' the local group, and membership in nested domain groups.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim objNetwork, objLocalGroup
+
+' These attributes must be declared in the main program,
+' so they are global in scope.
+Dim objTrans, strComputer, strNetBIOSDomain
+
+' Constants for the NameTranslate object.
+Const ADS_NAME_INITTYPE_GC = 3
+Const ADS_NAME_TYPE_NT4 = 3
+Const ADS_NAME_TYPE_1779 = 1
+
+' Determine NetBIOS name of domain and local computer.
+Set objNetwork = CreateObject("Wscript.Network")
+strNetBIOSDomain = objNetwork.UserDomain
+strComputer = objNetwork.ComputerName
+Set objNetwork = Nothing
+
+' Bind to local Administrators group.
+Set objLocalGroup = GetObject("WinNT://" & strComputer _
+    & "/Administrators,group")
+
+' Enumerate members of the local group.
+Call EnumLocalGroup(objLocalGroup)
+
+Sub EnumLocalGroup(ByVal objGroup)
+    ' Subroutine to enumerate members of local group.
+    ' The variable strComputer has global scope.
+
+    Dim objMember
+
+    ' Enumerate direct members of group.
+    For Each objMember In objGroup.Members
+        Wscript.Echo objMember.AdsPath
+        ' Test if member is a group.
+        If (LCase(objMember.Class) = "group") Then
+            ' Nested group. Test if objMember is a local group.
+            If (InStr(LCase(objMember.AdsPath), "/" _
+                    & LCase(strComputer) & "/") > 0) Then
+                ' objMember is a local group.
+                ' Call sub recursively to enumerate nested local group.
+                Call EnumLocalGroup(objMember)
+            ElseIf (InStr(LCase(objMember.AdsPath), _
+                    "/nt authority/") > 0) Then
+                ' objMember is local implicit group (special identity).
+                ' Membership cannot be enumerated.
+            Else
+                ' objMember is a domain group.
+                ' Call sub that uses LDAP provider to enumerate
+                ' nested domain group. objMember is bound with
+                ' WinNT provider.
+                Call EnumDomainGroup(objMember, True)
+            End If
+        End If
+    Next
+
+End Sub
+
+Sub EnumDomainGroup(ByVal objDomainGroup, ByVal blnNT)
+    ' Subroutine to enumerate members of domain group.
+    ' blnNT is True if objDomainGroup is bound with WinNT,
+    ' False if bound with LDAP.
+    ' The variables objTrans and strNetBIOSDomain have global scope.
+
+    Dim strNTName, strGroupDN, objGroup, objMember
+
+    ' Check if this function called before.
+    If (IsEmpty(objTrans) = True) Then
+        ' objDomainGroup must be bound with WinNT.
+        ' Setup NameTranslate. Connect to Global Catalog.
+        Set objTrans = CreateObject("NameTranslate")
+        objTrans.Init ADS_NAME_INITTYPE_GC, ""
+
+        ' Convert NetBIOS name of group to Distinguished Name.
+        strNTName = strNetBIOSDomain & "\" & objDomainGroup.Name
+        objTrans.Set ADS_NAME_TYPE_NT4, strNTName
+        strGroupDN = objTrans.Get(ADS_NAME_TYPE_1779)
+        ' Escape any forward slash characters, "/", with the backslash
+        ' escape character. All other characters that should be escaped are.
+        strGroupDN = Replace(strGroupDN, "/", "\/")
+    Else
+        ' NameTranslate already setup. Check if objDomainGroup
+        ' bound with WinNT.
+        If (blnNT = True) Then
+            ' Convert NetBIOS name of group to Distinguished Name.
+            strNTName = strNetBIOSDomain & "\" & objDomainGroup.Name
+            objTrans.Set ADS_NAME_TYPE_NT4, strNTName
+            strGroupDN = objTrans.Get(ADS_NAME_TYPE_1779)
+            ' Escape any forward slash characters, "/", with the backslash
+            ' escape character. All other characters that should be escaped are.
+            strGroupDN = Replace(strGroupDN, "/", "\/")
+        Else
+            ' objDomainGroup bound with LDAP. Retrieve Distinguished Name.
+            strGroupDN = objDomainGroup.distinguishedName
+            ' Escape any forward slash characters, "/", with the backslash
+            ' escape character. All other characters that should be escaped are.
+            strGroupDN = Replace(strGroupDN, "/", "\/")
+        End If
+    End If
+    ' Bind to group with the LDAP provider, if required.
+    If (blnNT = True) Then
+        Set objGroup = GetObject("LDAP://" & strGroupDN)
+    Else
+        Set objGroup = objDomainGroup
+    End If
+    ' Enumerate direct members of objDomainGroup (bound with LDAP).
+    For Each objMember In objGroup.Members
+        Wscript.Echo objMember.AdsPath
+        ' Check if objMember is a group.
+        If (LCase(objMember.Class) = "group") Then
+            ' Call sub recursively. objMember bound with LDAP.
+            Call EnumDomainGroup(objMember, False)
+        End If
+    Next
+
+End Sub

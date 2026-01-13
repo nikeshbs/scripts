@@ -1,0 +1,437 @@
+' Inventory2.vbs
+' VBScript program to inventory computers in the domain.
+' This version has the rows and columns reversed, compared to
+' the program Inventory.vbs, so the program can handle more than
+' 254 computers.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2008-2010 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - April 30, 2008
+' Version 1.1 - January 20, 2010 - List all Hot Fixes.
+' Version 1.2 - September 14, 2010 - Modify Ping function for IPv6.
+' Version 1.3 - November 6, 2010 - No need to set objects to Nothing.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim strComputer, strDN
+Dim objShell, objFSO, strTemp, strTempFile
+Dim objRootDSE, strRootDomain, adoConnection, adoCommand, strQuery
+Dim adoRecordset, strAttributes
+Dim objRemote, strRole
+Dim strExcelPath, objExcel, objSheet, intRow
+Dim colSettings, objOS, objComputer
+Dim objFix, strFixID
+Dim objIE, strIETitle, blnFlag, strPrevious, strStatus
+
+Const ADS_CHASE_REFERRALS_SUBORDINATE = &H20
+
+' Check for required argument.
+If (Wscript.Arguments.Count <> 1) Then
+    Wscript.Echo "Argument <FileName> required. For example" & vbCrLf _
+        & "cscript Inventory.vbs ""c:\MyFolder\Inventory.xls"""
+    Wscript.Quit
+End If
+
+' Spreadsheet file name to be created.
+strExcelPath = Wscript.Arguments(0)
+
+' Set IE display box title. Dashes ("-") are to move the Microsoft title
+' appended to the title we specify out of view.
+' blnFlag is set to False when the user closes the IE display box.
+strIETitle = "Computer Inventory" & String(60, "-")
+blnFlag = True
+
+Set objShell = CreateObject("Wscript.Shell")
+
+' Initialize display box with initial message.
+InitIE "Program Initializing..."
+
+' Determine DNS domain name from RootDSE object.
+On Error Resume Next
+Set objRootDSE = GetObject("LDAP://RootDSE")
+If (Err.Number <> 0) Then
+    On Error GoTo 0
+    MsgIE "IE_Quit"
+    Wscript.Echo "Domain not found, program aborted."
+    Wscript.Echo "You may not be logged into a domain."
+    Wscript.Quit
+End If
+On Error GoTo 0
+strRootDomain = objRootDSE.Get("rootDomainNamingContext")
+
+' Bind to Excel.
+On Error Resume Next
+Set objExcel = CreateObject("Excel.Application")
+If (Err.Number <> 0) Then
+    On Error GoTo 0
+    MsgIE "IE_Quit"
+    Wscript.Echo "Excel application not found."
+    Wscript.Echo "Program aborted."
+    Wscript.Quit
+End if
+On Error GoTo 0
+
+' Create new workbook.
+objExcel.Workbooks.Add
+
+' Bind to worksheet.
+Set objSheet = objExcel.ActiveWorkbook.Worksheets(1)
+objSheet.Name = "Inventory"
+
+' Write column headings.
+objSheet.Cells(1, 1).Value = "sAMAccountName"
+objSheet.Cells(1, 2).Value = "distinguishedName"
+objSheet.Cells(1, 3).Value = "WMI"
+objSheet.Cells(1, 4).Value = "# of OS's"
+objSheet.Cells(1, 5).Value = "OS Caption"
+objSheet.Cells(1, 6).Value = "OS Version"
+objSheet.Cells(1, 7).Value = "OS Service Pack"
+objSheet.Cells(1, 8).Value = "# of Hot Fixes"
+objSheet.Cells(1, 9).Value = "Hot Fix ID"
+objSheet.Cells(1, 10).Value = "# of Computer Systems"
+objSheet.Cells(1, 11).Value = "Computer Role"
+
+' Format spreadsheet.
+objSheet.Range("A1:K1").Font.Bold = True
+objSheet.Select
+objSheet.Range("B2").Select
+objExcel.ActiveWindow.FreezePanes = True
+objExcel.Columns(1).Columnwidth = 18
+objExcel.Columns(2).Columnwidth = 30
+objExcel.Columns(3).Columnwidth = 18
+objExcel.Columns(4).Columnwidth = 8
+objExcel.Columns(5).Columnwidth = 24
+objExcel.Columns(6).Columnwidth = 10
+objExcel.Columns(7).Columnwidth = 14
+objExcel.Columns(8).Columnwidth = 10
+objExcel.Columns(9).Columnwidth = 12
+objExcel.Columns(10).Columnwidth = 15
+objExcel.Columns(10).Columnwidth = 20
+
+' Use ADO to search Active Directory for all computers.
+Set adoCommand = CreateObject("ADODB.Command")
+Set adoConnection = CreateObject("ADODB.Connection")
+adoConnection.Provider = "ADsDSOObject"
+adoConnection.Open = "Active Directory Provider"
+adoCommand.ActiveConnection = adoConnection
+
+' Retrieve attributes.
+strAttributes = "sAMAccountName,distinguishedName"
+
+strQuery = "<LDAP://" & strRootDomain _
+    & ">;(ObjectCategory=computer);" & strAttributes & ";subtree"
+
+adoCommand.CommandText = strQuery
+adoCommand.Properties("Page Size") = 100
+adoCommand.Properties("Timeout") = 30
+adoCommand.Properties("Cache Results") = False
+adoCommand.Properties("Chase Referrals") = _
+    ADS_CHASE_REFERRALS_SUBORDINATE
+
+Set adoRecordset = adoCommand.Execute
+
+Set objFSO = CreateObject("Scripting.FileSystemObject")
+
+' Specify temporary file to save ping results.
+strTemp = objShell.ExpandEnvironmentStrings("%TEMP%")
+strTempFile = strTemp & "\RunResult.tmp"
+
+' Enumerate computer objects.
+intRow = 2
+Do Until adoRecordset.EOF
+    strComputer = adoRecordset.Fields("sAMAccountName").Value
+    ' Remove trailing "$".
+    strComputer = Left(strComputer, Len(strComputer) - 1)
+    objSheet.Cells(intRow, 1).Value = strComputer
+    objSheet.Cells(intRow, 1).Font.Bold = True
+    strDN = adoRecordset.Fields("distinguishedName").Value
+    objSheet.Cells(intRow, 2).Value = strDN
+
+    If (intRow = 2) Then
+        MsgIE "Documenting computer: " & strComputer _
+            & vbCrLf & "Previous: none" _
+            & vbCrLf & "Total documented: 0" _
+            & vbCrLf & "To abort, close this box"
+    Else
+        MsgIE "Documenting computer: " & strComputer _
+            & vbCrLf & "Previous: " & strPrevious & strStatus _
+            & vbCrLf & "Total documented: " & (intRow - 2) _
+            & vbCrLf & "To abort, close this box"
+    End If
+
+    strPrevious = strComputer
+
+    If (blnFlag = False) Then
+        ' Save spreadsheet and close the workbook.
+        On Error Resume Next
+        objExcel.ActiveWorkbook.SaveAs strExcelPath
+        If (Err.Number <> 0) Then
+            On Error GoTo 0
+            Wscript.Echo "Spreadsheet could not be saved as " & strExcelPath
+            Wscript.Echo "The path may be invalid."
+            strExcelPath = ""
+        End If
+        On Error GoTo 0
+        objExcel.ActiveWorkbook.Close
+
+        ' Quit Excel.
+        objExcel.Application.Quit
+
+        ' Clean up.
+        adoRecordset.Close
+        adoConnection.Close
+        If (objFSO.FileExists(strTempfile) = True) Then
+            objFSO.DeleteFile(strTempFile)
+        End If
+
+        Wscript.Echo "Program Aborted"
+        Wscript.Echo "Computers documented: " & (intRow - 1)
+        If (strExcelPath <> "") Then
+            Wscript.Echo "See spreadsheet " & strExcelPath
+        End If
+        Wscript.Quit
+    End If
+
+    ' Ping computer to see if online.
+    If (IsConnectible(strComputer, 1, 750) = True) Then
+        ' Connect to computer with WMI.
+        On Error Resume Next
+        Set objRemote = GetObject("winmgmts:" _
+            & "{impersonationLevel=impersonate}!\\" _
+            & strComputer & "\root\cimv2")
+        If (Err.Number <> 0) Then
+            On Error GoTo 0
+            objSheet.Cells(intRow, 3).Value = "WMI Not Installed"
+            strStatus = " no WMI"
+        Else
+            On Error GoTo 0
+            objSheet.Cells(intRow, 3).Value = "WMI Installed"
+            On Error Resume Next
+            Set colSettings = objRemote.ExecQuery _
+                ("SELECT * FROM Win32_OperatingSystem")
+            If (Err.Number <> 0) Then
+                On Error GoTo 0
+                  objSheet.Cells(intRow, 4).Value = "Failed"
+            Else
+                On Error GoTo 0
+                objSheet.Cells(intRow, 4).Value = colSettings.Count
+                For Each objOS In colSettings
+                    objSheet.Cells(intRow, 5).Value = objOS.Caption
+                    objSheet.Cells(intRow, 6).Value = objOS.Version
+                    objSheet.Cells(intRow, 7).Value = _
+                        objOS.ServicePackMajorVersion & "." _
+                        & objOS.ServicePackMinorVersion
+                Next
+                Set objOS = Nothing
+            End If
+
+            If (blnFlag = False) Then
+                ' Save spreadsheet and close the workbook.
+                On Error Resume Next
+                objExcel.ActiveWorkbook.SaveAs strExcelPath
+                If (Err.Number <> 0) Then
+                    On Error GoTo 0
+                    Wscript.Echo "Spreadsheet could not be saved as " _
+                        & strExcelPath
+                    Wscript.Echo "The path may be invalid."
+                    strExcelPath = ""
+                End If
+                On Error GoTo 0
+                objExcel.ActiveWorkbook.Close
+
+                ' Quit Excel.
+                objExcel.Application.Quit
+
+                ' Clean up.
+                adoRecordset.Close
+                adoConnection.Close
+                If (objFSO.FileExists(strTempfile) = True) Then
+                    objFSO.DeleteFile(strTempFile)
+                End If
+
+                Wscript.Echo "Program Aborted"
+                Wscript.Echo "Computers documented: " & (intRow - 1)
+                If (strExcelPath <> "") Then
+                    Wscript.Echo "See spreadsheet " & strExcelPath
+                End If
+                Wscript.Quit
+            End If
+
+            On Error Resume Next
+            Set colSettings = objRemote.ExecQuery _
+                ("SELECT * FROM Win32_QuickFixEngineering")
+            If (Err.Number <> 0) Then
+                On Error GoTo 0
+                objSheet.Cells(intRow, 8).Value = "Failed"
+            Else
+                On Error GoTo 0
+                objSheet.Cells(intRow, 8).Value = colSettings.Count
+                strFixID = ""
+                For Each objFix In colSettings
+                    If (strFixID = "") Then
+                        strFixID = objFix.HotFixID
+                    Else
+                        strFixID = strFixID & ";" & objFix.HotFixID
+                    End If
+                Next
+                objSheet.Cells(intRow, 9).Value = strFixID
+                Set objFix = Nothing
+            End If
+            On Error Resume Next
+            Set colSettings = objRemote.ExecQuery _
+                ("SELECT * FROM Win32_ComputerSystem")
+            If (Err.Number <> 0) Then
+                On Error GoTo 0
+                objSheet.Cells(intRow, 10).Value = "Failed"
+            Else
+                On Error GoTo 0
+                objSheet.Cells(intRow, 10).Value = colSettings.Count
+                For Each objComputer In colSettings
+                    Select Case objComputer.DomainRole
+                        Case 0
+                            strRole = "Standalone Workstation"
+                        Case 1
+                            strRole = "Member Workstation"
+                        Case 2
+                            strRole = "Standalone Server"
+                        Case 3
+                            strRole = "Member Server"
+                        Case 4
+                            strRole = "Backup Domain Controller"
+                        Case 5
+                            strRole = "Primary Domain Controller"
+                        Case Else
+                            strRole = "Unknown"
+                    End Select
+                    objSheet.Cells(intRow, 11).Value = strRole
+                Next
+                Set objComputer = Nothing
+            End If
+            Set colSettings = Nothing
+            strStatus = " documented"
+        End If
+    Else
+        objSheet.Cells(intRow, 3).Value = "Computer Not Found"
+        strStatus = " not on line"
+    End If
+
+    intRow = intRow + 1
+    adoRecordset.MoveNext
+Loop
+adoRecordset.Close
+
+' Save spreadsheet and close the workbook.
+On Error Resume Next
+objExcel.ActiveWorkbook.SaveAs strExcelPath
+If (Err.Number <> 0) Then
+    On Error GoTo 0
+    Wscript.Echo "Spreadsheet could not be saved as " & strExcelPath
+    Wscript.Echo "The path may be invalid."
+    strExcelPath = ""
+End If
+On Error GoTo 0
+objExcel.ActiveWorkbook.Close
+
+' Quit Excel.
+objExcel.Application.Quit
+
+' Clean up.
+adoConnection.Close
+If (objFSO.FileExists(strTempfile) = True) Then
+    objFSO.DeleteFile(strTempFile)
+End If
+
+' Close display box.
+MsgIE "IE_Quit"
+
+Wscript.Echo "Done"
+Wscript.Echo "Documented " & (intRow - 2) & " computers"
+If (strExcelPath <> "") Then
+    Wscript.Echo "See spreadsheet " & strExcelPath
+End If
+
+Function IsConnectible(ByVal strHost, ByVal intPings, ByVal intTO)
+    ' Returns True if strHost can be pinged.
+    ' Based on a program by Alex Angelopoulos and Torgeir Bakken.
+    ' Modified 09/14/2010 to search for "Reply from" instead of "TTL=".
+    Dim objFile, strResults
+
+    If (intPings = "") Then
+        intPings = 2
+    End If
+    If (intTO = "") Then
+        intTO = 750
+    End If
+
+    Const OpenAsDefault = -2
+    Const FailIfNotExist = 0
+    Const ForReading = 1
+
+    objShell.Run "%comspec% /c ping -n " & intPings & " -w " & intTO _
+        & " " & strHost & ">" & strTempFile, 0, True
+
+    Set objFile = objFSO.OpenTextFile(strTempFile, ForReading, _
+        FailIfNotExist, OpenAsDefault)
+    strResults = objFile.ReadAll
+    objFile.Close
+
+    Select Case InStr(strResults, "Reply from")
+        Case 0
+            IsConnectible = False
+        Case Else
+            IsConnectible = True
+    End Select
+End Function
+
+Sub MsgIE(ByVal strMsg)
+    ' Subroutine to display message in IE box and detect when the
+    ' box is closed by the program or the user.
+    On Error Resume Next
+    If (strMsg = "IE_Quit") Then
+        blnFlag = False
+        objIE.Quit
+    Else
+        objIE.Document.Body.InnerText = strMsg
+        If (Err.Number <> 0) Then
+            Err.Clear
+            blnFlag = False
+            Exit Sub
+        End If
+        objShell.AppActivate strIETitle
+    End If
+End Sub
+
+Sub InitIE(ByVal strMsg)
+    ' Subroutine to initialize the IE display box.
+    Dim intWidth, intHeight, intWidthW, intHeightW
+    Set objIE = CreateObject("InternetExplorer.Application")
+    objIE.ToolBar = False
+    objIE.StatusBar = False
+    objIE.Resizable = False
+    objIE.Navigate("about:blank")
+    Do Until objIE.readyState = 4
+        Wscript.Sleep 100
+    Loop
+    intWidth = objIE.document.ParentWindow.Screen.AvailWidth
+    intHeight = objIE.document.ParentWindow.Screen.AvailHeight
+    intWidthW = objIE.document.ParentWindow.Screen.AvailWidth * .60
+    intHeightW = objIE.document.ParentWindow.Screen.AvailHeight * .35
+    objIE.document.ParentWindow.resizeto intWidthW, intHeightW
+    objIE.document.ParentWindow.moveto (intWidth - intWidthW)/2, (intHeight - intHeightW)/2
+    objIE.document.Write "<body> " & strMsg & " </body></html>"
+    objIE.document.ParentWindow.document.body.style.backgroundcolor = "LightBlue"
+    objIE.document.ParentWindow.document.body.scroll="no"
+    objIE.document.ParentWindow.document.body.style.Font = "10pt 'Courier New'"
+    objIE.document.ParentWindow.document.body.style.borderStyle = "outset"
+    objIE.document.ParentWindow.document.body.style.borderWidth = "4px"
+    objIE.document.Title = strIETitle
+    objIE.Visible = True
+    Wscript.Sleep 100
+    objShell.AppActivate strIETitle
+End Sub

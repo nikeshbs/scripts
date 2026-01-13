@@ -1,0 +1,74 @@
+# PSPwdLastSet.ps1
+# PowerShell script to retrieve password information for a user.
+# This includes the date the password was last set, the domain maximum
+# password age policy, and whether the user can change their password.
+#
+# ----------------------------------------------------------------------
+# Copyright (c) 2011 Richard L. Mueller
+# Hilltop Lab web site - http://www.rlmueller.net
+# Version 1.0 - March 23, 2011
+#
+# You have a royalty-free right to use, modify, reproduce, and
+# distribute this script file in any way you find useful, provided that
+# you agree that the copyright owner above has no warranty, obligations,
+# or liability for such use.
+
+Trap {"Error: $_"; Break;}
+
+# Specify the user in Active Directory.
+$User = [ADSI]"LDAP://cn=Jim Smith,ou=West,dc=MyDomain,dc=com"
+
+# Retrieve user Distinguished Name.
+$DN = $User.distinguishedName
+"User: $DN"
+
+# Retrieve Domain maximum password age policy, in days.
+$D = [System.DirectoryServices.ActiveDirectory.Domain]::GetCurrentDomain()
+$Domain = [ADSI]"LDAP://$D"
+$MPA = $Domain.maxPwdAge.Value
+# Convert to Int64 ticks (100-nanosecond intervals).
+$lngMaxPwdAge = $Domain.ConvertLargeIntegerToInt64($MPA)
+# Convert to days.
+$MaxPwdAge = -$lngMaxPwdAge/(600000000 * 1440)
+"Domain Max Password Age (days): " + '{0:n3}' -f $MaxPwdAge
+
+# Retrieve user password settings to check if password can expire.
+$UAC = $User.userAccountControl
+$blnPwdExpires = -not (($UAC.Item(0) -band 64) -or ($UAC.Item(0) -band 65536))
+"Can Password Expire?: $blnPwdExpires"
+
+# Retrieve value of pwdLastSet attribute of user.
+$PLS = $User.pwdLastSet.Value
+# Convert to Int64 ticks.
+$lngValue = $User.ConvertLargeIntegerToInt64($PLS)
+# Convert to date.
+$Date = [DateTime]$lngValue
+If ($Date -eq 0)
+{
+    $PwdLastSet = "<Never>"
+}
+Else
+{
+    $PwdLastSet = $Date.AddYears(1600).ToLocalTime()
+}
+"Password Last Set (local time): $PwdLastSet"
+
+# Determine if user password is expired.
+$blnExpired = $False
+$Now = Get-Date
+If ($blnPwdExpires)
+{
+    If ($Date -eq 0)
+    {
+        $blnExpired = $True
+    }
+    Else
+    {
+        If ($PwdLastSet.AddDays($MaxPwdAge) -le $Now)
+        {
+            $blnExpired = $True
+        }
+    }
+}
+
+"Password Expired? $blnExpired"

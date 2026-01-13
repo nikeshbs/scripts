@@ -1,0 +1,180 @@
+' FindPgm.vbs
+' VBScript program to check a domain group of computers to determine if
+' a specified program is running. If the program is running on any of
+' the computers in the group, it is terminated.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2008 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - March 20, 2008
+' Version 1.1 - September 14, 2010 - Modify Ping function for IPv6.
+'
+' Program prompts for a domain group and the name of the program to
+' check. Each computer in the group is pinged to see if it is available.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim objRootDSE, strDNSDomain, objTrans, strNetBIOSDomain
+Dim strGroup, strGroupDN, objGroup, objMember, m_objFSO
+Dim strProgram, strComputer, m_objShell, m_strTempFile
+
+' Constants for the NameTranslate object.
+Const ADS_NAME_INITTYPE_GC = 3
+Const ADS_NAME_TYPE_NT4 = 3
+Const ADS_NAME_TYPE_1779 = 1
+
+' Determine DNS name of domain from RootDSE.
+Set objRootDSE = GetObject("LDAP://RootDSE")
+strDNSDomain = objRootDSE.Get("defaultNamingContext")
+
+' Use the NameTranslate object to find the NetBIOS domain name
+' from the DNS domain name.
+Set objTrans = CreateObject("NameTranslate")
+objTrans.Init ADS_NAME_INITTYPE_GC, ""
+objTrans.Set ADS_NAME_TYPE_1779, strDNSDomain
+strNetBIOSDomain = objTrans.Get(ADS_NAME_TYPE_NT4)
+' Remove trailing backslash.
+strNetBIOSDomain = Left(strNetBIOSDomain, Len(strNetBIOSDomain) - 1)
+
+' Prompt for group. Each computer in the group will be checked
+' to see if the specified program is running.
+strGroup =  InputBox("Enter NetBIOS name of group " _
+    & "(of computers) to check", "FindPgm Utility")
+
+' Use the Set method to specify the NT format of the object name.
+On Error Resume Next
+objTrans.Set ADS_NAME_TYPE_NT4, strNetBIOSDomain & "\" & strGroup
+If (Err.Number <> 0) Then
+    Wscript.Echo "Group " & strNetBIOSDomain _
+        & "\" & strGroup & " not found"
+    Wscript.Quit
+End If
+On Error GoTo 0
+
+' Use the Get method to retrieve the RFC 1779 Distinguished Name.
+strGroupDN = objTrans.Get(ADS_NAME_TYPE_1779)
+' Escape any forward slash characters, "/", with the backslash
+' escape character. All other characters that should be escaped are.
+strGroupDN = Replace(strGroupDN, "/", "\/")
+
+' Bind to the group object.
+Set objGroup = GetObject("LDAP://" & strGroupDN)
+
+' Prompt for the program to search for on each remote computer.
+strProgram = InputBox("Enter program name (such as notepad.exe) " _
+    & "to check for on each computer in the group", "FindPgm Utility")
+
+' Retrieve temporary file name for ping operation.
+Set m_objFSO = CreateObject("Scripting.FileSystemObject")
+Set m_objShell = CreateObject("Wscript.Shell")
+m_strTempFile = m_objShell.ExpandEnvironmentStrings("%TEMP%")
+m_strTempFile = m_strTempFile & "\RunResult.tmp"
+
+' Enumerate members of the group.
+For Each objMember In objGroup.Members
+    ' Only check computer objects.
+    If (LCase(objMember.Class) = "computer") Then
+        ' Retrieve NetBIOS name of computer.
+        strComputer = objMember.sAMAccountName
+        ' Remove trailing "$".
+        strComputer = Left(strComputer, Len(strComputer) - 1)
+        Wscript.Echo "Checking computer " & strComputer
+        ' Ping the computer to see if it is available.
+        If (IsConnectible(strComputer, 1, 500) = True) Then
+            ' Check if the program is running on the computer.
+            Call CheckProgram(strComputer, strProgram)
+        Else
+            Wscript.Echo "-- Computer not available"
+        End If
+    End If
+Next
+
+' Notify user.
+Wscript.Echo "Finished"
+
+Function IsConnectible(ByVal strHost, ByVal intPings, ByVal intTO)
+    ' Returns True if strHost can be pinged.
+    ' Based on a program by Alex Angelopoulos and Torgeir Bakken.
+    ' Requires the following variables be declared with global scope:
+    '   m_objShell, m_strTempFile, m_objFSO.
+    ' Modified 09/14/2010 to search for "Reply from" instead of "TTL=".
+
+    Dim objFile, strResults
+
+    If (intPings = "") Then
+        intPings = 2
+    End If
+    If (intTO = "") Then
+        intTO = 750
+    End If
+
+    Const OpenAsDefault = -2
+    Const FailIfNotExist = 0
+    Const ForReading = 1
+
+    ' Ping the host and redirect output to temporary file.
+    m_objShell.Run "%comspec% /c ping -n " & intPings & " -w " & intTO _
+        & " " & strHost & ">" & m_strTempFile, 0, True
+
+    ' Read the temporary file.
+    Set objFile = m_objFSO.OpenTextFile(m_strTempFile, ForReading, _
+        FailIfNotExist, OpenAsDefault)
+    strResults = objFile.ReadAll
+    objFile.Close
+
+    ' Determine if the host responded.
+    If (InStr(strResults, "Reply from") <> 0) Then
+        IsConnectible = True
+    Else
+        IsConnectible = False
+    End If
+End Function
+
+Sub CheckProgram(ByVal strComputer, ByVal strProcess)
+    ' Subroutine to check if a program is running on a remote computer.
+    ' If the program is running, it is terminated.
+
+    Dim objRemote, objRemoteProcess, colProcesses, blnRunning
+
+    ' Connect to remote computer with WMI.
+    On Error Resume Next
+    Set objRemote = GetObject("winmgmts:" _
+        & "{impersonationLevel=impersonate,authenticationLevel=Pkt}!\\" _
+        & strComputer & "\root\cimv2")
+    If (Err.Number <> 0) Then
+        On Error GoTo 0
+        Wscript.Echo "-- Unable to connect with WMI"
+        Exit Sub
+    End If
+    On Error GoTo 0
+
+    ' Check if executable running on remote computer.
+    Set colProcesses = objRemote.ExecQuery _
+        ("SELECT * FROM Win32_Process " _
+            & "WHERE Name = '" & strProcess & "'")
+    blnRunning = False
+    For Each objRemoteProcess In colProcesses
+        ' The program is running on the remote computer.
+        ' Terminate the program.
+        blnRunning = True
+        On Error Resume Next
+        objRemoteProcess.Terminate()
+        If (Err.Number <> 0) Then
+            Wscript.Echo "-- Error: " & Err.Number _
+                & vbCrLf & "-- Description: " & Err.Description
+            On Error GoTo 0
+        Else
+            On Error GoTo 0
+            Wscript.Echo "-- Program teminated"
+        End If
+    Next
+    If (blnRunning = False) Then
+        Wscript.Echo "-- Program not running"
+    End If
+
+End Sub

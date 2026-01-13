@@ -1,0 +1,112 @@
+' IsMember7.vbs
+' VBScript program demonstrating the use of Function IsMember.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2003 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - July 13, 2003
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim strUserDN, objGroupList, strGroupDN
+Dim objRootDSE, strDNSDomain, adoCommand, adoConnection
+Dim strBase, strAttributes
+
+' Bind to the user object.
+strUserDN = "cn=TestUser,ou=Sales,dc=MyDomain,dc=com"
+
+' Specify group Distinguished Name and check for membership.
+strGroupDN = "cn=Marketing,cn=Users,dc=MyDomain,dc=com"
+If (IsMember(strGroupDN) = True) Then
+    Wscript.Echo "User is member of " & strGroupDN
+Else
+    Wscript.Echo "User is NOT member of " & strGroupDN
+End If
+
+strGroupDN = "cn=Engineering,ou=East,dc=MyDomain,dc=com"
+If (IsMember(strGroupDN) = True) Then
+    Wscript.Echo "User is member of " & strGroupDN
+Else
+    Wscript.Echo "User is NOT member of " & strGroupDN
+End If
+
+strGroupDN = "cn=Domain Users,cn=Users,dc=MyDomain,dc=com"
+If (IsMember(strGroupDN) = True) Then
+    Wscript.Echo "User is member of " & strGroupDN
+Else
+    Wscript.Echo "User is NOT member of " & strGroupDN
+End If
+
+Function IsMember(ByVal strGroup)
+    ' Function to test group membership.
+    ' strGroup is the Distinguished Name of the group.
+    ' objGroupList is a dictionary object with global scope.
+    ' strUserDN is the Distinguished Name of the user, with
+    ' global scope. ADO is used to search for all groups that
+    ' have the user as a member.
+
+    If (IsEmpty(objGroupList) = True) Then
+        Set objGroupList = CreateObject("Scripting.Dictionary")
+        objGroupList.CompareMode = vbTextCompare
+
+        ' Determine DNS domain name.
+        Set objRootDSE = GetObject("LDAP://RootDSE")
+        strDNSDomain = objRootDSE.Get("DefaultNamingContext")
+
+        ' Use ADO to search Active Directory.
+        Set adoCommand = CreateObject("ADODB.Command")
+        Set adoConnection = CreateObject("ADODB.Connection")
+        adoConnection.Provider = "ADsDSOObject"
+        adoConnection.Open "Active Directory Provider"
+        adoCommand.ActiveConnection = adoConnection
+        strBase = "<GC://" & strDNSDomain & ">"
+        strAttributes = "distinguishedName"
+        adoCommand.Properties("Page Size") = 100
+        adoCommand.Properties("Timeout") = 30
+        adoCommand.Properties("Cache Results") = False
+
+        Call LoadGroups("(member=" & strUserDN & ")")
+        adoConnection.Close
+    End If
+    IsMember = objGroupList.Exists(strGroup)
+End Function
+
+Sub LoadGroups(ByVal strMemberFilter)
+    ' Recursive subroutine to populate a dictionary object with group
+    ' memberships. strMemberFilter is the filter used by ADO to find
+    ' groups having the members specified. When this subroutine is first
+    ' called by Function IsMember, strMemberFilter specifies the user.
+    ' On recursive calls, strMemberFilter specifies all groups returned
+    ' by the previous call of the subroutine. The subroutine is called
+    ' once for each level of group nesting.
+
+    Dim strFilter, strQuery, strDN, adoRecordset
+    Dim strNextFilter, blnRecurse
+
+    strFilter = "(&(objectCategory=Group)" & strMemberFilter & ")"
+    strQuery = strBase & ";" & strFilter & ";" & strAttributes & ";subtree"
+    adoCommand.CommandText = strQuery
+    Set adoRecordset = adoCommand.Execute
+    strNextFilter = "(|"
+    blnRecurse = False
+
+    Do Until adoRecordset.EOF
+        strDN = adoRecordset.Fields("DistinguishedName").Value
+        If (objGroupList.Exists(strDN) = False) Then
+            objGroupList.Add strDN, True
+            strNextFilter = strNextFilter & "(member=" & strDN & ")"
+            blnRecurse = True
+        End If
+        adoRecordset.MoveNext
+    Loop
+    adoRecordset.Close
+    If (blnRecurse = True) Then
+        strNextFilter = strNextFilter & ")"
+        Call LoadGroups(strNextFilter)
+    End If
+End Sub

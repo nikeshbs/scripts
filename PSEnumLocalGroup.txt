@@ -1,0 +1,105 @@
+# PSEnumLocalGroup.ps1
+# PowerShell script to enumerate members of a local group.
+#
+# ----------------------------------------------------------------------
+# Copyright (c) 2011 Richard L. Mueller
+# Hilltop Lab web site - http://www.rlmueller.net
+# Version 1.0 - April 4, 2011
+# Version 1.1 - June 24, 2011 - Escape any "/" characters in DN's.
+#
+# This program demonstrates how to enumerate members of a local group.
+# Reveals direct membership in the local group, membership in nested
+# local groups, membership in domain groups that are members of the
+# local group, and membership in nested domain groups.
+#
+# You have a royalty-free right to use, modify, reproduce, and
+# distribute this script file in any way you find useful, provided that
+# you agree that the copyright owner above has no warranty, obligations,
+# or liability for such use.
+
+Trap {"Error: $_"; Break;}
+
+Function EnumLocalGroup($LocalGroup)
+{
+    # Invoke the Members method and convert to an array of member objects.
+    $Members= @($LocalGroup.psbase.Invoke("Members"))
+
+    ForEach ($Member In $Members)
+    {
+        $Name = $Member.GetType().InvokeMember("Name", 'GetProperty', $Null, $Member, $Null)
+        $Path = $Member.GetType().InvokeMember("ADsPath", 'GetProperty', $Null, $Member, $Null)
+        $Path
+        # Check if this member is a group.
+        If ($Member.GetType().InvokeMember("Class", 'GetProperty', $Null, $Member, $Null) -eq "group")
+        {
+            # Check if this group is local or domain.
+            If ($Path -like "*/$strComputer/*")
+            {
+                # Enumerate members of local group.
+                EnumLocalGroup $Member
+            }
+            Else
+            {
+                # Enumerate members of domain group.
+                EnumDomainGroup $Member $Name $True
+            }
+        }
+    }
+}
+
+Function EnumDomainGroup($DomainGroup, $NTName, $blnNT)
+{
+    If ($blnNT -eq $True)
+    {
+        # Convert NetBIOS domain name of group to Distinguished Name.
+        $objNT.InvokeMember("Set", "InvokeMethod", $Null, $objTrans, (3, "$strNetBIOSDomain$NTName"))
+        $DN = $objNT.InvokeMember("Get", "InvokeMethod", $Null, $objTrans, 1)
+        $DN = $DN.Replace("/", "\/")
+        $Group = [ADSI]"LDAP://$DN"
+    }
+    Else
+    {
+        $DN = $DomainGroup.distinguishedName
+        $Group = $DomainGroup
+    }
+    ForEach ($MemberDN In $Group.Member)
+    {
+        $MemberDN = $MemberDN.Replace("/", "\/")
+        $MemberGroup = [ADSI]"LDAP://$MemberDN"
+        $MemberGroup.ADsPath
+        # Check if this member is a group.
+        If ($MemberGroup.Class -eq "group")
+        {
+            EnumDomainGroup $MemberGroup $MemberGroup.Name $False
+        }
+    }
+}
+
+# Specify the local group.
+$strGroup = "Administrators"
+
+# Retrieve Distinguished Name of current domain.
+$Domain = [System.DirectoryServices.ActiveDirectory.Domain]::GetCurrentDomain()
+$Root = $Domain.GetDirectoryEntry()
+$Base = ($Root.distinguishedName)
+
+# Use the NameTranslate object.
+$objTrans = New-Object -comObject "NameTranslate"
+$objNT = $objTrans.GetType()
+
+# Initialize NameTranslate by locating the Global Catalog.
+$objNT.InvokeMember("Init", "InvokeMethod", $Null, $objTrans, (3, $Null))
+
+# Retrieve NetBIOS name of the current domain.
+$objNT.InvokeMember("Set", "InvokeMethod", $Null, $objTrans, (1, "$Base"))
+$strNetBIOSDomain = $objNT.InvokeMember("Get", "InvokeMethod", $Null, $objTrans, 3)
+
+# Specify the computer.
+$strComputer = "MyComputer"
+"Computer: $strComputer"
+
+# Bind to the group object with the WinNT provider.
+$Group = [ADSI]"WinNT://$strComputer/$strGroup,group"
+"Group: $strGroup"
+
+EnumLocalGroup $Group

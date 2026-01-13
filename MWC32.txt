@@ -1,0 +1,211 @@
+' MWC32.vbs
+' VBScript program to generate psuedo random numbers using
+' a 32-bit Multiply With Carry Generator.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2007 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - January 2, 2007
+'
+' Syntax:
+'     cscript //nologo MWC32.vbs <count> <seed>
+' where:
+'    <count> is the number of random values to display (optional).
+'        Count must be a positive integer. The default count is 10.
+'    <seed> is a seed value (optional).
+'         Seed must be an integer greater than or equal to 0 and less
+'         than 2^32. The default value is based on the system timer.
+' Program outputs psuedo random integers greater than or equal to 0
+' and less than 2^32.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim lngSeed, lngCarry, k, lngCount
+
+' Retrieve arguments or assign defaults.
+If (Wscript.Arguments.Count = 0) Then
+    ' The default number of psuedo random numbers to display is 10.
+    lngCount = 10
+Else
+    lngCount = Wscript.Arguments(0)
+End If
+
+If (Wscript.Arguments.Count < 2) Then
+    ' Default seed value is based on the system timer.
+    lngSeed = Fix((Timer * (2^32)) / (24 * 60 * 60))
+Else
+    lngSeed = Wscript.Arguments(1)
+End If
+
+' Validate values.
+If (Wscript.Arguments.Count > 2) Then
+    Call Syntax(1)
+    Wscript.Quit
+End If
+Select Case LCase(lngCount)
+    Case "-h", "/h", "help", "-?", "/?", "-help", "/help", "?"
+        Call Syntax(0)
+        Wscript.Quit
+End Select
+
+If (IsNumeric(lngSeed) = False) Then
+    Call Syntax(2)
+    Wscript.Quit
+End If
+If (IsNumeric(lngCount) = False) Then
+    Call Syntax(3)
+    Wscript.Quit
+End If
+If (lngSeed < 0) Then
+    Call Syntax(4)
+    Wscript.Quit
+End If
+If (lngSeed -  (2^32) + 1 > 0) Then
+    Call Syntax(5)
+    Wscript.Quit
+End If
+If (Fix(lngCount) - lngCount <> 0) Then
+    Call Syntax(6)
+    Wscript.Quit
+End If
+If (Fix(lngSeed) - lngSeed <> 0) Then
+    Call Syntax(7)
+    Wscript.Quit
+End If
+If (lngCount < 0) Then
+    Call Syntax(8)
+    Wscript.Quit
+End If
+
+' Display the initial seed value.
+Wscript.Echo "Initial seed value: " & FormatNumber(lngSeed, 0)
+
+' The initial carry is 48,313.
+' The initial carry should be an integer greater than 0 and
+' less than 2^32 = 4,294,967,296. The initial carry should
+' not be 0 or A - 1 = 4,164,903,689.
+lngCarry = 48313
+
+' Display number of integers requested from the
+' psuedo random number generator.
+Wscript.Echo CStr(lngCount) & " psuedo random integers:"
+Wscript.Echo ""
+For k = 1 To lngCount
+    lngSeed = MWC(lngSeed, lngCarry)
+    Wscript.Echo FormatNumber(lngSeed, 0)
+Next
+
+Function MWC(ByRef lngX, ByRef lngC)
+    ' Psuedo Random Number Generator based on
+    ' the Multiply With Carry Generator
+    '     Xi = [(A * Xi-1) + Ci-1] Mod M
+    '     Ci = Integer[((A * Xi-1) + Ci-1) / M]
+    ' Where:
+    '     A = 4,164,903,690
+    '     M = 2^32 = 4,294,967,296
+    ' Note:
+    '     B = (A * M) - 1 = 17,888,125,139,539,722,239
+    '     P = (B - 1) / 2 = 8,944,062,569,769,861,119
+    '     B and P are both prime.
+    '     The period of the generator is P.
+    '     Period =~ 8.944 * 10^18 =~ 2^63.
+    ' The values are broken into high and low 16-bit parts as follows:
+    '     A = A_Hi * 2^16 + A_Lo
+    '     lngC = C = C_Hi * 2^16 + C_Lo
+    '     lngX = Xi = Xi-1 = S_Hi * 2^16 + S_Lo
+    ' lngX and lngC are integers greater than or equal to 0
+    ' and less than M.
+    ' Each time this function is called it returns the next integer in
+    ' a psuedo random sequence. The return value is an integer greater
+    ' than or equal to 0 and less than M. The function also assigns
+    ' new values to lngX and lngC. These new values are required
+    ' for the next time the function is called.
+    ' Note:  There are two cases where this generator will have a
+    ' period of 1. One case is when the initial Ci = 0 and the
+    ' initial Xi = 0. The other case is when the initial Ci = A - 1
+    ' and the initial Xi = M - 1.  Both of these trivial cases are
+    ' avoided by selecting the initial Carry to be other than 0 or A - 1.
+
+    Dim S_Hi, S_Lo, C_Hi, C_Lo
+    Dim F1, F2, F3, T1, T2, T3
+
+    ' Constants for Multiply With Carry Generator.
+    ' A = 4,164,903,690 = (A_Hi * 2^16) + A_Lo
+    Const A_Hi = 63551
+    Const A_Lo = 25354
+    ' M = 2^32 = 4,294,967,296
+    Const M = 4294967296
+
+    ' Constant for breaking numbers into High and Low 16-bit parts.
+    ' 2^16 = 65,536
+    Const H = 65536
+
+    ' Break up values into high and low 16-bit parts.
+    S_Hi = Fix(lngX / H)
+    S_Lo = lngX - (S_Hi * H)
+    C_Hi = Fix(lngC / H)
+    C_Lo = lngC - (C_Hi * H)
+
+    ' Calculate intermediate results.
+    '     Xi = [(F1 * 2^32) + (F2 * 2^16) + F3] Mod M
+    '     Ci = Int[((F1 * 2^32) + (F2 * 2^16) + F3) / M]
+    F1 = A_Hi * S_Hi
+    F2 = (A_Hi * S_Lo) + (A_Lo * S_Hi) + C_Hi
+    F3 = (A_Lo * S_Lo) + C_Lo
+
+    ' Calculate Xi = [(F1 * 2^32) + (F2 * 2^16) + F3] Mod M.
+    T1 = Fix(F2 / H)
+    T2 = F2 - (T1 * H)
+    lngX = (T2 * H) + F3
+    T3 = Fix(lngX / M)
+    lngX = lngX - (T3 * M)
+
+    ' Calculate Ci = Int[((F1 * 2^32) + (F2 * 2^16) + F3) / M].
+    lngC = Fix((F2 / H) + F1)
+
+    MWC = lngX
+
+End Function
+
+Sub Syntax(ByVal intError)
+    ' Subroutine to display error messages and syntax help.
+
+    Select Case intError
+        Case 1
+            Wscript.Echo "Error, too many arguments."
+        Case 2
+            Wscript.Echo "Error, seed must be numeric value."
+        Case 3
+            Wscript.Echo "Error, count must be numeric."
+        Case 4
+            Wscript.Echo "Error, seed must be greater than or equal to 0."
+        Case 5
+            Wscript.Echo "Error, seed must be less than 2^32 (4,294,967,296)"
+        Case 6
+            Wscript.Echo "Error, count must be integer."
+        Case 7
+            Wscript.Echo "Error, seed must be integer."
+        Case 8
+            Wscript.Echo "Error, count must be positive."
+    End Select
+    Wscript.Echo "MWC32.vbs - VBScript program to generate random numbers."
+    Wscript.Echo "Syntax:"
+    Wscript.Echo "    cscript //nologo MWC32.vbs <count> <seed>"
+    Wscript.Echo "where:"
+    Wscript.Echo "    <count> is number of random integers to display (optional)."
+    Wscript.Echo "        Count must be a positive integer. Default value is 10."
+    Wscript.Echo "    <seed> is a seed value (optional)."
+    Wscript.Echo "        Seed must be an integer greater than or equal to 0"
+    Wscript.Echo "        and less than 2^32. Default value is based"
+    Wscript.Echo "        on the system timer."
+    Wscript.Echo "Program outputs psuedo random integers greater than or equal"
+    Wscript.Echo "to 0 and less than 2^32 (4,294,967,296)."
+    Wscript.Echo "Copyright(c) 2006 Richard L. Mueller"
+    Wscript.Echo "Version 1.0 - December 22, 2006"
+
+End Sub

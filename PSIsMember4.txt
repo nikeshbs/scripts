@@ -1,0 +1,80 @@
+# PSIsMember4.ps1
+# PowerShell program demonstrating the use of Function IsMember.
+#
+# ----------------------------------------------------------------------
+# Copyright (c) 2011 Richard L. Mueller
+# Hilltop Lab web site - http://www.rlmueller.net
+# Version 1.0 - May 12, 2011
+# Version 1.1 - May 14, 2011 - Use function and modify for Windows 7.
+# Version 1.2 - July 3, 2011 - Simplify function.
+#
+# An efficient IsMember function to test group membership for a single
+# user or computer, using the "tokenGroups" attribute. The function
+# reveals membership in nested groups and the primary group.
+#
+# You have a royalty-free right to use, modify, reproduce, and
+# distribute this script file in any way you find useful, provided that
+# you agree that the copyright owner above has no warranty, obligations,
+# or liability for such use.
+
+Trap {"Error: $_"; Break;}
+
+$GroupList = @{}
+
+Function IsMember($ADObject, $GroupName)
+{
+    If ($GroupList.Count -eq 0)
+    {
+        # Retrieve tokenGroups attribute, which is operational (constructed).
+        $ADObject.psbase.RefreshCache("tokenGroups")
+        $SIDs = $ADObject.psbase.Properties.Item("tokenGroups")
+        # Populate hash table with security group memberships.
+        ForEach ($Value In $SIDs)
+        {
+            $SID = New-Object System.Security.Principal.SecurityIdentifier $Value, 0
+            $Group = $SID.Translate([System.Security.Principal.NTAccount])
+            $GroupList.Add($Group.Value.Split("\")[1], $True)
+        }
+    }
+    If ($GroupList.ContainsKey($GroupName))
+    {
+        Return $True
+    }
+    Else
+    {
+        Return $False
+    }
+}
+
+# Bind to the user object in Active Directory with the LDAP provider.
+$User = [ADSI]"LDAP://cn=TestUser,ou=Sales,dc=MyDomain,dc=com"
+
+$GroupName = "Accounting"
+If (IsMember $User $GroupName -eq $True)
+{
+    "User " + $User.sAMAccountName + " is a member of group " + $GroupName
+}
+Else
+{
+    "User " + $User.sAMAccountName + " is NOT a member of group " + $GroupName
+}
+
+$GroupName = "Sales"
+If (IsMember $User $GroupName -eq $True)
+{
+    "User " + $User.sAMAccountName + " is a member of group " + $GroupName
+}
+Else
+{
+    "User " + $User.sAMAccountName + " is NOT a member of group " + $GroupName
+}
+
+$GroupName = "Domain Users"
+If (IsMember $User $GroupName -eq $True)
+{
+    "User " + $User.sAMAccountName + " is a member of group " + $GroupName
+}
+Else
+{
+    "User " + $User.sAMAccountName + " is NOT a member of group " + $GroupName
+}

@@ -1,0 +1,113 @@
+' LastLogonTimeStamp.vbs
+' VBScript program to determine when each user in the domain last logged
+' on. Domain must be at Windows Server 2003 Functional Level.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2007-2010 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - March 24, 2007
+' Version 1.1 - July 6, 2007 - Modify how IADsLargeInteger interface
+'                              is invoked.
+' Version 1.2 - November 6, 2010 - No need to set objects to Nothing.
+'
+' The lastLogonTimeStamp attribute is Integer8, a 64-bit number
+' representing the date as the number of 100 nanosecond intervals since
+' 12:00 am January 1, 1601. This value is converted to a date. The last
+' logon date is in UTC (Coordinated Univeral Time). It must be adjusted
+' by the Time Zone bias in the machine registry to convert to local
+' time.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim objRootDSE, adoConnection, adoCommand, strQuery
+Dim adoRecordset, strDNSDomain, objShell, lngBiasKey
+Dim lngBias, k, strDN, dtmDate, objDate
+Dim strBase, strFilter, strAttributes, lngHigh, lngLow
+
+' Obtain local Time Zone bias from machine registry.
+' This bias changes with Daylight Savings Time.
+Set objShell = CreateObject("Wscript.Shell")
+lngBiasKey = objShell.RegRead("HKLM\System\CurrentControlSet\Control\" _
+    & "TimeZoneInformation\ActiveTimeBias")
+If (UCase(TypeName(lngBiasKey)) = "LONG") Then
+    lngBias = lngBiasKey
+ElseIf (UCase(TypeName(lngBiasKey)) = "VARIANT()") Then
+    lngBias = 0
+    For k = 0 To UBound(lngBiasKey)
+        lngBias = lngBias + (lngBiasKey(k) * 256^k)
+    Next
+End If
+Set objShell = Nothing
+
+' Determine DNS domain from RootDSE object.
+Set objRootDSE = GetObject("LDAP://RootDSE")
+strDNSDomain = objRootDSE.Get("defaultNamingContext")
+Set objRootDSE = Nothing
+
+' Use ADO to search Active Directory.
+Set adoCommand = CreateObject("ADODB.Command")
+Set adoConnection = CreateObject("ADODB.Connection")
+adoConnection.Provider = "ADsDSOObject"
+adoConnection.Open "Active Directory Provider"
+adoCommand.ActiveConnection = adoConnection
+
+' Search entire domain.
+strBase = "<LDAP://" & strDNSDomain & ">"
+
+' Filter on all user objects.
+strFilter = "(&(objectCategory=person)(objectClass=user))"
+
+' Comma delimited list of attribute values to retrieve.
+strAttributes = "distinguishedName,lastLogonTimeStamp"
+
+' Construct the LDAP syntax query.
+strQuery = strBase & ";" & strFilter & ";" & strAttributes & ";subtree"
+
+' Run the query.
+adoCommand.CommandText = strQuery
+adoCommand.Properties("Page Size") = 100
+adoCommand.Properties("Timeout") = 60
+adoCommand.Properties("Cache Results") = False
+Set adoRecordset = adoCommand.Execute
+
+' Enumerate resulting recordset.
+Do Until adoRecordset.EOF
+   ' Retrieve attribute values for the user.
+    strDN = adoRecordset.Fields("distinguishedName").Value
+    ' Convert Integer8 value to date/time in current time zone.
+    On Error Resume Next
+    Set objDate = adoRecordset.Fields("lastLogonTimeStamp").Value
+    If (Err.Number <> 0) Then
+        On Error GoTo 0
+        dtmDate = #1/1/1601#
+    Else
+        On Error GoTo 0
+        lngHigh = objDate.HighPart
+        lngLow = objDate.LowPart
+        If (lngLow < 0) Then
+            lngHigh = lngHigh + 1
+        End If
+        If (lngHigh = 0) And (lngLow = 0) Then
+            dtmDate = #1/1/1601#
+        Else
+            dtmDate = #1/1/1601# + (((lngHigh * (2 ^ 32)) _
+                + lngLow)/600000000 - lngBias)/1440
+        End If
+    End If
+    ' Display values for the user.
+    If (dtmDate = #1/1/1601#) Then
+        Wscript.Echo strDN & ";Never"
+    Else
+        Wscript.Echo strDN & ";" & dtmDate
+    End If
+    adoRecordset.MoveNext
+Loop
+
+' Clean up.
+adoRecordset.Close
+adoConnection.Close

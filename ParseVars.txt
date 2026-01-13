@@ -1,0 +1,434 @@
+' ParseVars.vbs
+' Program to determine how many times each variable and user
+' defined constant is referenced in a VBScript program.
+' Keeps track of the scope of each.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2007-2011 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - September 11, 2006
+' Version 1.1 - March 24, 2007 - Account for Preserve keyword with ReDim
+' Version 1.2 - January 30, 2008 - Handle more delimiters.
+' Version 1.3 - June 11, 2008 - Track number of variables not used.
+'                              Handle variable names in square brackets.
+' Version 1.4 - November 6, 2010 - No need to set objects to Nothing.
+' Version 1.5 - October 8, 2011 - Require "Option Explicit" statement.
+'
+' This program can be used to find variables and constants that are
+' declared but no longer used. Use of Option Explicit is required.
+' Syntax:
+'     ParseVars.vbs <VBScript file name>
+' For example:
+'     cscript //nologo ParseVars.vbs "c:\scripts\MyTest.vbs"
+' Output in form:
+'     <scope>\<variable or constant>: <number of references>
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim objFSO, strFileName, objFile, strLine
+Dim objList, arrVariables, strVariable
+Dim arrLines, strStatement, blnExpl
+Dim strScope, intIndex, intNotUsed
+
+' Check required argument.
+If (Wscript.Arguments.Count <> 1) Then
+    Wscript.Echo "Missing argument, file name"
+    Call SyntaxHelp
+    Wscript.Quit
+    Wscript.Quit
+End If
+
+' Retrieve file name.
+strFileName = Wscript.Arguments(0)
+
+' Check for syntax request.
+Select Case LCase(strfileName)
+    Case "/h"
+        Call SyntaxHelp
+        Wscript.Quit
+    Case "/?"
+        Call SyntaxHelp
+        Wscript.Quit
+    Case "?"
+        Call SyntaxHelp
+        Wscript.Quit
+    Case "-?"
+        Call SyntaxHelp
+        Wscript.Quit
+    Case "-h"
+        Call SyntaxHelp
+        Wscript.Quit
+    Case "/help"
+        Call SyntaxHelp
+        Wscript.Quit
+    Case "-help"
+        Call SyntaxHelp
+        Wscript.Quit
+End Select
+
+' Open the VBScript file.
+Set objFSO = CreateObject("Scripting.FileSystemObject")
+On Error Resume Next
+Set objFile = objFSO.OpenTextFile(strFileName, 1)
+If (Err.Number <> 0) Then
+    Wscript.Echo Err.Number
+    On Error GoTo 0
+    Wscript.Echo "File not found: " & strFileName
+    Wscript.Quit
+End If
+On Error GoTo 0
+
+' Setup dictionary object of variables and constants.
+Set objList = CreateObject("Scripting.Dictionary")
+objList.CompareMode = vbTextCompare
+
+' Start with global scope.
+strScope = "%%global"
+
+' Read each line of the VBScript file and retrieve
+' all variables and constants declared, with their scope.
+blnExpl = False
+Do Until objFile.AtEndOfStream
+
+    strLine = LCase(Trim(objFile.ReadLine))
+    strLine = GetLine(strLine)
+    strLine = Replace(strLine, vbTab, " ")
+    ' Remove all quoted strings.
+    strLine = RemoveStrings(strLine)
+
+    ' Break up into statements, if more than one per line.
+    arrLines = Split(strLine, ":")
+    ' Process each statement.
+    For Each strStatement In arrLines
+
+        strStatement = Trim(strStatement)
+
+        If (strStatement = "option explicit") Then
+            blnExpl = True
+        End If
+
+        If (Left(strStatement, 4) = "dim ") Then
+            ' Retrieve declared variables.
+            Call GetVars(Trim(Mid(strStatement, 5)))
+        ElseIf (Left(strStatement, 6) = "const ") Then
+            ' Retrieve user defined constants.
+            Call GetConst(Trim(Mid(strStatement, 7)))
+        ElseIf (Left(strStatement, 15) = "redim preserve ") Then
+            ' Variable must have been previously declared, skip.
+        ElseIf (Left(strStatement, 6) = "redim ") Then
+            ' Retrieve declared variables.
+            Call GetVars(Trim(Mid(strStatement, 7)))
+        ElseIf (Left(strStatement, 4) = "sub ") Then
+            ' Retrieve variables in Sub statement.
+            Call GetSub(Trim(Mid(strStatement, 5)))
+        ElseIf (Left(strStatement, 9) = "function ") Then
+            ' Retrieve variables in Function statement.
+            Call GetSub(Trim(Mid(strStatement, 10)))
+        ElseIf (strStatement = "end sub") Then
+            ' Return to global scope.
+            strScope = "%%global"
+        ElseIf (strStatement = "end function") Then
+            ' Return to global scope.
+            strScope = "%%global"
+        Else
+            ' Skip all other lines.
+        End If
+    Next
+Loop
+objFile.Close
+
+If (blnExpl = False) Then
+    Wscript.Echo "File does not have an ""Option Explicit"" statement"
+    Wscript.Echo "Program aborted"
+    Wscript.Quit
+End If
+
+' Read the file again.
+Set objFile = objFSO.OpenTextFile(strFileName, 1)
+
+' Start with global scope.
+strScope = "%%global"
+
+' Read each line of the VBScript file and count number of
+' times each variable and constant is referenced.
+Do Until objFile.AtEndOfStream
+
+    strLine = LCase(Trim(objFile.ReadLine))
+    strLine = GetLine(strLine)
+    strLine = Replace(strLine, vbTab, " ")
+    ' Remove all quoted strings.
+    strLine = RemoveStrings(strLine)
+
+    ' Break up into statements, if more than one per line.
+    arrLines = Split(strLine, ":")
+    ' Process each statement.
+    For Each strStatement In arrLines
+
+        strStatement = Trim(strStatement)
+
+        If (Left(strStatement, 4) = "dim ") Then
+            ' Skip.
+        ElseIf (Left(strStatement, 6) = "const ") Then
+            ' Skip.
+        ElseIf (Left(strStatement, 6) = "redim ") Then
+            ' Skip.
+        ElseIf (Left(strStatement, 4) = "sub ") Then
+            ' Determine scope.
+            strStatement = Trim(Mid(strStatement, 5))
+            intIndex = InStr(strStatement, "(")
+            If (intIndex = 0) Then
+                strScope = strStatement
+            Else
+                strScope = Trim(Mid(strStatement, 1, intIndex - 1))
+            End If
+        ElseIf (Left(strStatement, 9) = "function ") Then
+            ' Determine scope.
+            strStatement = Trim(Mid(strStatement, 10))
+            intIndex = InStr(strStatement, "(")
+            If (intIndex = 0) Then
+                strScope = strStatement
+            Else
+                strScope = Trim(Mid(strStatement, 1, intIndex - 1))
+            End If
+        ElseIf (strStatement = "end sub") Then
+            ' Return to global scope.
+            strScope = "%%global"
+        ElseIf (strStatement = "end function") Then
+            ' Return to global scope.
+            strScope = "%%global"
+        Else
+            ' Parse all other lines for variables and constants.
+            Call ParseLine(strStatement)
+        End If
+    Next
+Loop
+objFile.Close
+
+' List variables and constants, with their scope,
+' and the number of times each is referenced.
+' Output in the form:
+' <scope>\<variable>: <number of references>
+intNotUsed = 0
+arrVariables = objList.Keys
+For Each strVariable In arrVariables
+    Wscript.Echo strVariable & ": " & objList.Item(strVariable)
+    If (CInt(objList.Item(strVariable)) = 0) Then
+        intNotUsed = intNotUsed + 1
+    End If
+Next
+Wscript.Echo "Number of variables not used: " & CStr(intNotUsed)
+
+Sub GetVars(ByVal strValue)
+    ' Retrieve variables from a comma delimited list,
+    ' such as from a Dim statement or Sub or Function statement.
+    ' Keep track of the scope of each.
+    Dim arrVars, j, strVariable, intIndex
+
+    arrVars = Split(strValue, ",")
+    For j = 0 To UBound(arrVars)
+        strVariable = Trim(arrVars(j))
+
+        ' If variable name starts with "[" and ends with "]"
+        ' replace blanks with underscores.
+        If (Left(strVariable, 1) = "[") _
+                And (Right(strVariable, 1) = "]") Then
+            strVariable = Replace(strVariable, " ", "_")
+        End If
+
+        ' Strip off any bounds.
+        intIndex = InStr(strVariable, "(")
+        If (intIndex > 0) Then
+            strVariable = Left(strVariable, intIndex - 1)
+        End If
+        strVariable = strScope & "\" & strVariable
+        If Not objList.Exists(strVariable) Then
+            objList.Item(strVariable) = 0
+        End If
+    Next
+End Sub
+
+Sub GetConst(ByVal strValue)
+    ' Retrieve user defined constants from a Const statement.
+    ' Keep track of the scope of each.
+    Dim intIndex, strResult
+
+    intIndex = InStr(strValue, "=")
+    If (intIndex > 0) Then
+        strResult = Trim(Mid(strValue, 1, intIndex - 1))
+
+        ' If constant name starts with "[" and ends with "]"
+        ' replace blanks with underscores.
+        If (Left(strResult, 1) = "[") _
+                And (Right(strResult, 1) = "]") Then
+            strResult = Replace(strResult, " ", "_")
+        End If
+        strResult = strScope & "\" & strResult
+
+        If Not objList.Exists(strResult) Then
+            objList.Item(strResult) = 0
+        End If
+    End If
+
+End Sub
+
+Sub ParseLine(ByVal strLine)
+    ' Parse each statement and look for declared variables/constants.
+    Dim arrValues, strValue, intCount, blnFound, intLeft, intRight
+    Dim strWord1, strWord2
+
+    ' Skip comments.
+    If Left(strLine, 1) = "'" Then
+        Exit Sub
+    End If
+    If Left(strLine, 4) = "rem " Then
+        Exit Sub
+    End If
+
+    ' Handle variables inclosed in brackets.
+    ' Replace embedded spaces with underscores.
+    intLeft = Instr(strLine, "[")
+    Do Until (intLeft = 0)
+        intRight = InStr(intLeft, strLine, "]")
+        If (intRight > 0) Then
+            strWord1 = Mid(strLine, intLeft, intRight - intLeft)
+            strWord2 = Replace(strWord1, " ", "_")
+            strLine = Replace(strLine, strWord1, strWord2)
+        End If
+        intLeft = InStr(intRight, strline, "[")
+    Loop
+
+    ' Replace delimiters with spaces.
+    strLine = Replace(strLine, "(", " ")
+    strLine = Replace(strLine, ")", " ")
+    strLine = Replace(strLine, ",", " ")
+    strLine = Replace(strLine, "=", " ")
+    strLine = Replace(strLine, "<", " ")
+    strLine = Replace(strLine, ">", " ")
+    strLine = Replace(strLine, "&", " ")
+    strLine = Replace(strLine, "*", " ")
+    strLine = Replace(strLine, "+", " ")
+    strLine = Replace(strLine, "-", " ")
+    strLine = Replace(strLine, "^", " ")
+    strLine = Replace(strLine, "/", " ")
+    strLine = Replace(strLine, "\", " ")
+
+    ' Replace periods with a space followed by period (.),
+    ' so we can recognize the word that comes before
+    ' the period as an object reference, but ignore
+    ' the word that comes after a period, since it
+    ' would be a property or method of the object.
+    strLine = Replace(strLine, ".", " .")
+
+    ' Break up each statement into words.
+    arrValues = Split(strLine)
+    ' Check each word.
+    For Each strValue In arrValues
+        ' Ignore words that start with a period, as they are
+        ' properties or methods of objects.
+        If (Left(strValue, 1) <> ".") Then
+            ' Check local scope first.
+            blnFound = False
+            If (strScope <> "%%global") Then
+                ' If the word is found in the list of variables/constants,
+                ' increment the number of references.
+                If objList.Exists(strScope & "\" & strValue) Then
+                    intCount = objList.Item(strScope & "\" & strValue) + 1
+                    objList.Item(strScope & "\" & strValue) = intCount
+                    ' If the word is found in the local scope,
+                    ' do not check the global scope.
+                    ' Variables declared in local scope override global.
+                    blnFound = True
+                End If
+            End If
+            If (blnFound = False) Then
+                ' Check global scope.
+                ' If the word is found in the list of variables/constants,
+                ' increment the number of references.
+                If objList.Exists("%%global\" & strValue) Then
+                    intCount = objList.Item("%%global\" & strValue) + 1
+                    objList.Item("%%global\" & strValue) = intCount
+                End If
+            End If
+        End If
+    Next
+    
+End Sub
+
+Function RemoveStrings(ByVal strValue)
+    ' Remove all quoted strings.
+    Dim j, blnQuoted, strChar
+
+    blnQuoted = False
+    RemoveStrings = ""
+    For j = 1 To Len(strValue)
+        strChar = Mid(strValue, j, 1)
+        If (strChar = """") Then
+            If (blnQuoted = False) Then
+                blnQuoted = True
+            Else
+                blnQuoted = False
+            End If
+        Else
+            If (blnQuoted = False) Then
+                RemoveStrings = RemoveStrings & strChar
+            End If
+        End If
+    Next
+
+End Function
+
+Sub GetSub(ByVal strCall)
+    ' Process subroutine and function statements.
+    ' Keep track of the scope.
+    ' Parse for variables.
+    Dim intIndex, strLine
+
+    intIndex = InStr(strCall, "(")
+    If (intIndex = 0) Then
+        strScope = strCall
+    Else
+        strScope = Trim(Mid(strCall, 1, intIndex - 1))
+        strLine = Mid(strCall, intIndex + 1)
+        strLine = Left(strLine, Len(strLine) - 1)
+        strLine = Replace(strLine, "byval", "")
+        strLine = Replace(strLine, "byref", "")
+        Call GetVars(strLine)
+    End If
+
+End Sub
+
+Sub SyntaxHelp
+    ' Subroutine to output syntax help.
+    Wscript.Echo "ParseVars.vbs"
+    Wscript.Echo "Program to determine how many times each variable"
+    Wscript.Echo "and user defined constant is referenced in a"
+    Wscript.Echo "VBScript program. Used to find variables declared"
+    Wscript.Echo "but never used. Use of ""Option Explicit"" is required."
+    Wscript.Echo "Syntax:"
+    Wscript.Echo "    ParseVars.vbs <VBScript file name>"
+    Wscript.Echo "For example:"
+    Wscript.Echo "    cscript //nologo ParseVars.vbs ""c:\scripts\MyTest.vbs"""
+    Wscript.Echo "Output in form:"
+    Wscript.Echo "    <scope>\<variable or constant>: <number of references>"
+End Sub
+
+Function GetLine(ByVal strLine)
+    ' Recursive function to handle line continuations.
+    Dim strNextLine
+    ' Check for line continuation character.
+    If (Right(strLine, 1) = "_") Then
+        ' Remove line continuation character and append space.
+        strLine = Left(strLine, Len(strLine) - 1) & " "
+        ' Read the next line. objFile has global scope.
+        strNextLine = LCase(Trim(objFile.ReadLIne))
+        ' Append the next line.
+        ' Call this function recursively.
+        strLine = strLine & GetLine(strNextLine)
+    End If
+    GetLine = strLine
+End Function

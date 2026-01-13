@@ -1,0 +1,90 @@
+' EnumUserGroups.vbs
+' VBScript program to enumerate the groups a user belongs to.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2002-2011 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - November 10, 2002
+' Version 1.1 - February 19, 2003 - Standardize Hungarian notation.
+' Version 1.2 - January 25, 2004 - Modify error trapping.
+' Version 1.3 - July 31, 2007 - Escape any "/" characters in group DN's.
+' Version 1.4 - November 6, 2010 - No need to set objects to Nothing.
+' Version 1.5 - March 25, 2011 - Show nesting and duplicates.
+' Program uses a recursive subroutine to enumerate all of the groups
+' that a user belongs to, including nested groups. The program does not
+' include the Primary Group of the user. The program outputs each
+' group's DistinguishedName. The output can be redirected to a text
+' file. The LDAP Distinguished Name of the user is passed to the
+' program as a parameter.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim objGroupList, objUser, strDN
+
+' Check for required argument.
+If (Wscript.Arguments.Count < 1) Then
+    Wscript.Echo "Required argument <Distinguished Name> missing. " _
+        & "For example:" & vbCrLf _
+        & "cscript EnumUserGroups.vbs cn=User2,ou=Sales,dc=MyDomain,dc=com"
+    Wscript.Quit(0)
+End If
+
+' Bind to the user object with the LDAP provider.
+strDN = Wscript.Arguments(0)
+On Error Resume Next
+Set objUser = GetObject("LDAP://" & strDN)
+If (Err.Number <> 0) Then
+    On Error GoTo 0
+    Wscript.Echo "User not found" & vbCrLf & strDN
+    Wscript.Quit(1)
+End If
+On Error GoTo 0
+
+' Bind to dictionary object.
+Set objGroupList = CreateObject("Scripting.Dictionary")
+
+' Enumerate group memberships.
+Call EnumGroups(objUser, "")
+
+Sub EnumGroups(ByVal objADObject, ByVal strOffset)
+    ' Recursive subroutine to enumerate user group memberships.
+    ' Includes nested group memberships.
+    Dim colstrGroups, objGroup, j
+    objGroupList.CompareMode = vbTextCompare
+    colstrGroups = objADObject.memberOf
+    If (IsEmpty(colstrGroups) = True) Then
+        Exit Sub
+    End If
+    If (TypeName(colstrGroups) = "String") Then
+        ' Escape any forward slash characters, "/", with the backslash
+        ' escape character. All other characters that should be escaped are.
+        colstrGroups = Replace(colstrGroups, "/", "\/")
+        Set objGroup = GetObject("LDAP://" & colstrGroups)
+        If (objGroupList.Exists(objGroup.sAMAccountName) = False) Then
+            objGroupList.Add objGroup.sAMAccountName, True
+            Wscript.Echo strOffset & objGroup.distinguishedName
+            Call EnumGroups(objGroup, strOffset & "--")
+        Else
+            Wscript.Echo strOffset & objGroup.distinguishedName & " (Duplicate)"
+        End If
+        Exit Sub
+    End If
+    For j = 0 To UBound(colstrGroups)
+        ' Escape any forward slash characters, "/", with the backslash
+        ' escape character. All other characters that should be escaped are.
+        colstrGroups(j) = Replace(colstrGroups(j), "/", "\/")
+        Set objGroup = GetObject("LDAP://" & colstrGroups(j))
+        If (objGroupList.Exists(objGroup.sAMAccountName) = False) Then
+            objGroupList.Add objGroup.sAMAccountName, True
+            Wscript.Echo strOffset & objGroup.distinguishedName
+            Call EnumGroups(objGroup, strOffset & "--")
+        Else
+            Wscript.Echo strOffset & objGroup.distinguishedName & " (Duplicate)"
+        End If
+    Next
+End Sub

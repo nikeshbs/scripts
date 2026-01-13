@@ -1,0 +1,73 @@
+' Ping2.vbs
+' VBScript program demonstrating how to ping remote computers to check
+' if they are available. The PingMachine function requires WSH 5.6.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2007-2010 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - January 2, 2007
+' Version 1.1 - September 14, 2010 - Modify Ping function for IPv6.
+' Version 1.2 - November 6, 2010 - No need to set objects to Nothing.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim strComputer, objShell
+
+' Check for required argument.
+If (Wscript.Arguments.Count <> 1) Then
+    Wscript.Echo "Argument <ComputerName> required. For example" & vbCrLf _
+        & "cscript Ping2.vbs MyComputer"
+    Wscript.Quit
+End If
+
+' NetBIOS name of computer.
+strComputer = Wscript.Arguments(0)
+
+Set objShell = CreateObject("Wscript.Shell")
+
+' Ping computer to see if online.
+If (PingMachine(strComputer, 1, 750) = True) Then
+    Wscript.Echo "Computer " & strComputer & " is available"
+Else
+    Wscript.Echo "Computer " & strComputer & " is NOT available"
+End If
+
+Function PingMachine(ByVal strHost, ByVal intPings, ByVal intTO)
+    ' Returns True if strHost can be pinged.
+    ' Variable objShell has global scope
+    ' and must be declared in the main program.
+    ' Modified 09/14/2010 to search for "Reply from" instead of "TTL=".
+
+    Dim strResults
+    Dim objExecObject
+
+    If (intPings = "") Then
+        intPings = 2
+    End If
+    If (intTO = "") Then
+        intTO = 750
+    End If
+
+    ' Ping the machine.
+    Set objExecObject = objShell.Exec("%comspec% /c ping -n " _
+        & CStr(intPings) & " -w " & CStr(intTO) & " " & strHost)
+
+    ' Read the output.
+    Do Until objExecObject.StdOut.AtEndOfStream
+        strResults = objExecObject.StdOut.ReadAll
+    Loop
+
+    Select Case InStr(strResults, "Reply from")
+        Case 0
+            ' No response.
+            PingMachine = False
+        Case Else
+            ' Computer responded to ping.
+            PingMachine = True
+    End Select
+End Function

@@ -1,0 +1,73 @@
+' IsMember1.vbs
+' VBScript program demonstrating the use of Function IsMember.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2002-2010 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - November 10, 2002
+' Version 1.1 - February 19, 2003 - Standardize Hungarian notation.
+' Version 1.2 - March 11, 2003 - WinNT provider does not reveal computer
+'                                group membership.
+' Version 1.3 - November 6, 2010 - No need to set objects to Nothing.
+' An efficient IsMember function to test group membership for a single
+' user. Does not reveal membership in nested groups. If the WinNT
+' provider is used to bind to the user object, the IsMember function
+' will reveal membership in the primary group. However, the WinNT
+' provider cannot be used to test for computer group membership. If the
+' LDAP provider is used, the function will not reveal membership in the
+' primary group.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim objGroupList, objADObject, strGroup
+
+' Bind to the user object with the WinNT provider.
+Set objADObject = GetObject("WinNT://MyDomain/Testuser,user")
+
+strGroup = "Sales"
+If (IsMember(strGroup) = True) Then
+    Wscript.Echo "User " & objADObject.name _
+        & " is a member of group " & strGroup
+Else
+    Wscript.Echo "User " & objADObject.name _
+        & " is NOT a member of group " & strGroup
+End If
+
+strGroup = "Engineering"
+If (IsMember(strGroup) = True) Then
+    Wscript.Echo "User " & objADObject.name _
+        & " is a member of group " & strGroup
+Else
+    Wscript.Echo "User " & objADObject.name _
+        & " is NOT a member of group " & strGroup
+End If
+
+Function IsMember(ByVal strGroup)
+    ' Function to test for group membership.
+    ' strGroup is the NT name (sAMAccountName) of the group to test.
+    ' objGroupList is a dictionary object, with global scope.
+    ' Returns True if the user is a member of the group.
+
+    If (IsEmpty(objGroupList) = True) Then
+        Call LoadGroups
+    End If
+    IsMember = objGroupList.Exists(strGroup)
+End Function
+
+Sub LoadGroups
+    ' Subroutine to populate dictionary object with group memberships.
+    ' objADObject is the user object, with global scope.
+    ' objGroupList is a dictionary object, with global scope.
+
+    Dim objGroup
+    Set objGroupList = CreateObject("Scripting.Dictionary")
+    objGroupList.CompareMode = vbTextCompare
+    For Each objGroup In objADObject.Groups
+        objGroupList.Add objGroup.name, True
+    Next
+End Sub

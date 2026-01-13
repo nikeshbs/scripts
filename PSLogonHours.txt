@@ -1,0 +1,101 @@
+# PSLogonHours.ps1
+# PowerShell program to document hours of the week when a given Active
+# Directory user is allowed to logon, using the logonHours attribute.
+#
+# ----------------------------------------------------------------------
+# Copyright (c) 2011 Richard L. Mueller
+# Hilltop Lab web site - http://www.rlmueller.net
+# Version 1.0 - August 6, 2011
+# Version 1.1 - September 19, 2012 - Modify rounding of local time
+#               zone bias to handle fractions of hour properly.
+#
+# You have a royalty-free right to use, modify, reproduce, and
+# distribute this script file in any way you find useful, provided that
+# you agree that the copyright owner above has no warranty, obligations,
+# or liability for such use.
+
+# Read user DN from command line or prompt for value.
+Param ($DN)
+If ($DN -eq $Null)
+{
+    $DN = Read-Host "Enter Distinguished Name of user"
+}
+
+# Retrieve local Time Zone bias from machine registry in hours.
+# This bias does not change with Daylight Savings Time.
+# Modified September 19, 2012, to handle fractions of an hour properly.
+$Bias = [Math]::Round((Get-ItemProperty `
+    -Path HKLM:\System\CurrentControlSet\Control\TimeZoneInformation).Bias/60, `
+    0, [MidpointRounding]::AwayFromZero)
+
+# Create an empty array with 168 elements, one for each hour of the week.
+$LH = New-Object 'object[]' 168
+
+Function OctetToHours ($Octet)
+{
+    # Function to convert Octet value (byte array) into binary string
+    # representing the logonHours attribute. The 168 bits represent 24 hours
+    # per day for 7 days, Sunday through Saturday. The logonHours attribute
+    # in Active Directory is in UTC. This function converts into the local
+    # time zone. If the bit is "1", the user is allowed to logon during
+    # that hour. If the bit is "0", the user is not allowed to logon.
+
+    If ($Octet -eq $Null)
+    {
+        # If the logonHours attribute has no value, the user is allowed
+        # logon all hours.
+        For ($j = 0; $j -le 167; $j = $j + 1)
+        {
+            $LH[$j] = "1"
+        }
+    }
+    Else
+    {
+        # Loop through the 21 bytes in the array, each representing 8 hours.
+        For ($j = 0; $j -le 20; $j = $j + 1)
+        {
+            # Check each of the 8 bits in each byte.
+            For ($k = 7; $k -ge 0; $k = $k - 1)
+            {
+                # Adjust the index into an array of hours for the
+                # local time zone bias.
+                $m = 8*$j + $k - $Bias
+                # The index into the  array of hours ranges from 0 to 167.
+                If ($m -lt 0) {$m = $m + 168}
+                # Check the bit of the byte and assign the corresponding
+                # element of the array.
+                If ($Octet[$j] -band [Math]::Pow(2, $k)) {$LH[$m] = "1"}
+                Else {$LH[$m] = "0"}
+            }
+        }
+    }
+
+    # Header lines.
+    "Day"
+    "of   ------- Hour of the Day -------"
+    "Week M-3 3-6 6-9 9-N N-3 3-6 6-9 9-M"
+    $arrDays = ("Sun", "Mon", "Tue", "Wed", "thu", "Fri", "Sat")
+
+    # Loop through the array of 168 hours.
+    For ($j = 0; $j -le 167; $j = $j + 1)
+    {
+        If (($j % 24) -eq 0)
+        {
+            # First hour of a day.
+            $Line = $arrDays[$j / 24] + " "
+        }
+        If (($j %3) -eq 0)
+        {
+            # Insert a space every 3 hours for legibility.
+            $Line = $Line + " "
+        }
+        $Line = $Line + $LH[$j]
+        # If this is the last hour of the day, output.
+        If ((($j + 1) % 24) -eq 0) {$Line}
+    }
+}
+
+$User = [ADSI]"LDAP://$DN"
+"User: " + $User.Name
+
+OctetToHours $User.logonHours[0]

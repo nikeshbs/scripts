@@ -1,0 +1,151 @@
+' EnumGroup2.vbs
+' VBScript program to enumerate members of a group by retrieving the
+' "member" multivalued attribute of the group. Uses ADO range limits
+' to handle groups with more than 1000 members. Uses a recursive
+' subroutine to handle nested groups. Uses a dictionary object to
+' recognize duplicate group members (due to nesting).
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2003 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - March 28, 2003
+' Version 1.1 - October 29, 2003 - Use dictionary object.
+' Version 1.2 - July 31, 2007 - Escape any "/" characters in DN's.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim strNTName, objRootDSE, strDNSDomain, adoCommand
+Dim adoConnection, strBase, strAttributes, objGroupList
+
+' Check for required argument.
+If (Wscript.Arguments.Count <> 1) Then
+    Wscript.Echo "Required argument <NT Name> missing. " _
+        & "For example:" & vbCrLf _
+        & "cscript //nologo EnumGroup.vbs ""GroupNTName"""
+    Wscript.Quit(0)
+End If
+
+strNTName = Wscript.Arguments(0)
+
+' Determine DNS domain name.
+Set objRootDSE = GetObject("LDAP://RootDSE")
+strDNSDomain = objRootDSE.Get("DefaultNamingContext")
+
+' Use dictionary object to track unique group members.
+Set objGroupList = CreateObject("Scripting.Dictionary")
+objGroupList.CompareMode = vbTextCompare
+
+' Use ADO to search Active Directory.
+Set adoCommand = CreateObject("ADODB.Command")
+Set adoConnection = CreateObject("ADODB.Connection")
+adoConnection.Provider = "ADsDSOObject"
+adoConnection.Open = "Active Directory Provider"
+adoCommand.ActiveConnection = adoConnection
+adoCommand.Properties("Page Size") = 100
+adoCommand.Properties("Timeout") = 30
+adoCommand.Properties("Cache Results") = False
+
+' Specify base of search and "member" attribute to retrieve.
+strBase = "<LDAP://" & strDNSDomain & ">"
+strAttributes = "member"
+
+' Enumerate group members.
+Call EnumMembers(strNTName, "")
+
+Sub EnumMembers(ByVal strName, ByVal strOffset)
+    ' Recursive subroutine to enumerate members of a group,
+    ' including nested group memberships.
+    ' Uses range limits to handle groups with more than 1000 members.
+
+    Dim strFilter, strQuery, adoRecordset, objMember
+    Dim strDN, intCount, blnLast, intLowRange
+    Dim intHighRange, intRangeStep, objField
+
+    ' Filter on objects of class "group" and specified name.
+    strFilter = "(&(ObjectCategory=group)" _
+        & "(ObjectClass=group)" _
+        & "(sAMAccountName=" & strName & "))"
+
+    ' Setup to retrieve 1000 members at a time.
+    blnLast = False
+    intRangeStep = 999
+    intLowRange = 0
+    IntHighRange = intLowRange + intRangeStep
+
+    Do While True
+
+        If (blnLast = True) Then
+            ' If last query, retrieve remaining members.
+            strQuery = strBase & ";" & strFilter & ";" _
+                & strAttributes & ";range=" & intLowRange _
+                & "-*;subtree"
+        Else
+            ' If not last query, retrieve 1000 members.
+            strQuery = strBase & ";" & strFilter & ";" _
+              & strAttributes & ";range=" & intLowRange & "-" _
+              & intHighRange & ";subtree"
+        End If
+        adoCommand.CommandText = strQuery
+        Set adoRecordset = adoCommand.Execute
+        intCount = 0
+
+        Do Until adoRecordset.EOF
+            For Each objField In adoRecordset.Fields
+                If (VarType(objField) = (vbArray + vbVariant)) _
+                        Then
+                    For Each strDN In objField.Value
+                        ' Escape any forward slash characters, "/", with the backslash
+                        ' escape character. All other characters that should be escaped are.
+                        strDN = Replace(strDN, "/", "\/")
+                        ' Check dictionary object for duplicates.
+                        If (objGroupList.Exists(strDN) = False) Then
+                            ' Add to dictionary object.
+                            objGroupList.Add strDN, True
+
+                            ' Bind to each group member, to find "class" of member.
+                            Set objMember = GetObject("LDAP://" & strDN)
+                            ' Output group member.
+                            Wscript.Echo strOffset & "Member of " _
+                                & strName & ": " & strDN
+                            intCount = intCount + 1
+                            If (UCase(objMember.Class) = "GROUP") Then
+                                ' If the member is class "group",
+                                ' call subroutine recursively.
+                                Call _
+                                    EnumMembers(objMember.sAMAccountName, _
+                                    strOffset & "--")
+                            End If
+                        Else
+                            ' Duplicate member. Output group member.
+                            Wscript.Echo strOffset & "Member of " _
+                                & strName & ": " & strDN & " (Duplicate)"
+                        End If
+                    Next
+                End If
+            Next
+            adoRecordset.MoveNext
+        Loop
+        adoRecordset.Close
+
+        ' If this is the last query, exit the Do While loop.
+        If (blnLast = True) Then
+            Exit Do
+        End If
+
+        ' If the previous query returned no members, then the previous
+        ' query for the next 1000 members failed. Perform one more
+        ' query to retrieve remaining members (less than 1000).
+        If (intCount = 0) Then
+            blnLast = True
+        Else
+            ' Setup to retrieve next 1000 members.
+            intLowRange = intHighRange + 1
+            intHighRange = intLowRange + intRangeStep
+        End If
+    Loop
+End Sub

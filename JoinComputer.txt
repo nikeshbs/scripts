@@ -1,0 +1,177 @@
+' JoinComputer.vbs
+' VBScript program to grant permission to a group or user to join a
+' computer to the domain. The group NT name and the computer
+' Distinguished Name are specified in the program.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2003-2010 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - July 13, 2003
+' Version 1.1 - January 25, 2004 - Modify error trapping.
+' Version 1.2 - November 6, 2010 - No need to set objects to Nothing.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Const USER_ACCOUNT_RESTRICTIONS = _
+    "{4C164200-20C0-11D0-A768-00AA006E0529}"
+Const VALIDATED_SPN = "{F3A64788-5306-11D1-A9C5-0000F80367C1}"
+Const VALIDATED_DNS_HOST_NAME = "{72E39547-7B18-11D1-ADEF-00C04FD8D5CD}"
+Const RESET_PASSWORD_GUID = "{00299570-246D-11D0-A768-00AA006E0529}"
+Const ADS_RIGHT_DS_CONTROL_ACCESS = &H100
+Const ADS_RIGHT_DS_WRITE_PROP = &H20
+Const ADS_RIGHT_DS_SELF = &H8
+Const ADS_ACETYPE_ACCESS_ALLOWED = &H0
+Const ADS_ACETYPE_ACCESS_DENIED = &H1
+Const ADS_ACETYPE_ACCESS_ALLOWED_OBJECT = &H5
+Const ADS_ACETYPE_ACCESS_DENIED_OBJECT = &H6
+Const ADS_ACEFLAG_INHERITED_ACE = &H10
+Const ADS_ACEFLAG_OBJECT_TYPE_PRESENT = &H1
+
+Dim objSecDescriptor, objDACL, objComputer
+Dim strComputerDN, strTrustee
+Dim objACE1, objACE2, objACE3, objACE4
+
+' Specify the trustee - group NT name in form "MyDomain\GroupNTName".
+strTrustee = "MyDomain\Marketing"
+
+' Bind to the computer object with the LDAP provider.
+strComputerDN = "cn=Mrktg23,cn=Computers,dc=MyDomain,dc=com"
+On Error Resume Next
+Set objComputer = GetObject("LDAP://" & strComputerDN)
+If (Err.Number <> 0) Then
+    On Error GoTo 0
+    Wscript.Echo "Computer not found" & vbCrLf & strComputerDN
+    Wscript.Quit(1)
+End If
+On Error GoTo 0
+
+' Bind to the computer security objects.
+On Error Resume Next
+Set objSecDescriptor = objComputer.Get("ntSecurityDescriptor")
+If (Err.Number <> 0) Then
+    On Error GoTo 0
+    Wscript.Echo "Cannot retrieve security descriptor" & vbCrLf _
+        & "ADsSecurity.dll may not be registered on this computer" _
+        & vbCrLf & "Program aborted"
+    Wscript.Quit
+End If
+On Error GoTo 0
+Set objDACL = objSecDescriptor.discretionaryAcl
+
+' Create ACE 1 - Write Account Restrictions.
+Set objACE1 = CreateObject("AccessControlEntry")
+objACE1.Trustee = strTrustee
+objACE1.AceFlags = 0
+objACE1.AceType = ADS_ACETYPE_ACCESS_ALLOWED_OBJECT
+objACE1.Flags = ADS_ACEFLAG_OBJECT_TYPE_PRESENT
+objACE1.objectType = USER_ACCOUNT_RESTRICTIONS
+objACE1.AccessMask = ADS_RIGHT_DS_WRITE_PROP
+objDACL.AddAce objACE1
+
+' Create ACE 2 - Validated Write to Service Principal Name.
+Set objACE2 = CreateObject("AccessControlEntry")
+objACE2.Trustee = strTrustee
+objACE2.AceFlags = 0
+objACE2.AceType = ADS_ACETYPE_ACCESS_ALLOWED_OBJECT
+objACE2.Flags = ADS_ACEFLAG_OBJECT_TYPE_PRESENT
+objACE2.objectType = VALIDATED_SPN
+objACE2.AccessMask = ADS_RIGHT_DS_SELF
+objDACL.AddAce objACE2
+
+' Create ACE 3 - Validated Write to DNS Host Name.
+Set objACE3 = CreateObject("AccessControlEntry")
+objACE3.Trustee = strTrustee
+objACE3.AceFlags = 0
+objACE3.AceType = ADS_ACETYPE_ACCESS_ALLOWED_OBJECT
+objACE3.Flags = ADS_ACEFLAG_OBJECT_TYPE_PRESENT
+objACE3.objectType = VALIDATED_DNS_HOST_NAME
+objACE3.AccessMask = ADS_RIGHT_DS_SELF
+objDACL.AddAce objACE3
+
+' Create ACE 4 - Reset Password.
+Set objACE4 = CreateObject("AccessControlEntry")
+objACE4.Trustee = strTrustee
+objACE4.AceFlags = 0
+objACE4.AceType = ADS_ACETYPE_ACCESS_ALLOWED_OBJECT
+objACE4.Flags = ADS_ACEFLAG_OBJECT_TYPE_PRESENT
+objACE4.objectType = RESET_PASSWORD_GUID
+objACE4.AccessMask = ADS_RIGHT_DS_CONTROL_ACCESS
+objDACL.AddAce objACE4
+
+' Reorder ACE's in DACL.
+objSecDescriptor.discretionaryACL = Reorder(objDACL)
+      
+' Update the Computer object.
+On Error Resume Next
+objComputer.Put "ntSecurityDescriptor", objSecDescriptor
+If (Err.Number <> 0) Then
+    On Error GoTo 0
+    Wscript.Echo "Security descriptor cannot be saved" _
+        & vbCrLf & "Trustee may not exist"
+    Wscript.Quit
+End If
+On Error GoTo 0
+objComputer.SetInfo
+
+Wscript.Echo "Done"
+
+Function Reorder(objDACL)
+    ' Reorder ACE's in DACL.
+
+    Dim objNewDACL, objInheritedDACL, objAllowDACL, objDenyDACL
+    Dim objAllowObjectDACL, objDenyObjectDACL, objACE
+
+    Set objNewDACL = CreateObject("AccessControlList")
+    Set objInheritedDACL = CreateObject("AccessControlList")
+    Set objAllowDACL = CreateObject("AccessControlList")
+    Set objDenyDACL = CreateObject("AccessControlList")
+    Set objAllowObjectDACL = CreateObject("AccessControlList")
+    Set objDenyObjectDACL = CreateObject("AccessControlList")
+
+    For Each objACE In objDACL
+        If ((objACE.AceFlags And ADS_ACEFLAG_INHERITED_ACE) = _
+                ADS_ACEFLAG_INHERITED_ACE) Then
+            objInheritedDACL.AddAce objACE
+        Else
+            Select Case objACE.AceType
+                Case ADS_ACETYPE_ACCESS_ALLOWED
+                    objAllowDACL.AddAce objACE
+                Case ADS_ACETYPE_ACCESS_DENIED
+                    objDenyDACL.AddAce objACE
+                Case ADS_ACETYPE_ACCESS_ALLOWED_OBJECT
+                    objAllowObjectDACL.AddAce objACE
+                Case ADS_ACETYPE_ACCESS_DENIED_OBJECT
+                    objDenyObjectDACL.AddAce objACE
+            End Select
+        End If
+    Next
+        
+    For Each objACE In objDenyDACL
+        objNewDACL.AddAce objACE
+    Next
+      
+    For Each objACE In objDenyObjectDACL
+        objNewDACL.AddAce objACE
+    Next
+        
+    For Each objACE In objAllowDACL
+        objNewDACL.AddAce objACE
+    Next
+        
+    For Each objACE In objAllowObjectDACL
+        objNewDACL.AddAce objACE
+    Next
+        
+    For Each objACE In objInheritedDACL
+        objNewDACL.AddAce objACE
+    Next
+        
+    objNewDACL.ACLRevision = objDACL.ACLRevision
+    Set Reorder = objNewDACL
+
+End Function

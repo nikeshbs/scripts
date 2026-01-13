@@ -1,0 +1,118 @@
+' ParseStartups.vbs
+' VBScript program to parse log files created by startup and shutdown
+' scripts similar to Logon5.vbs. The program outputs one line for each
+' session with the computer name, startup date/time, shutdown date/time,
+' and the difference in hours, minutes, and seconds.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2009 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - May 5, 2009
+' Version 1.1 - November 4, 2010
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim strLogFile, objFSO, objLog, strLine, arrValues
+Dim strAction, strDate, strComputer
+Dim objComputerList, intDuration, intHr, intMin, strSec
+
+Const ForReading = 1
+
+' Specify the shared logfile.
+strLogFile = "\\MyServer\LogFile\Domain.log"
+
+' Dictionary object of computer sessions and startup dates.
+Set objComputerList = CreateObject("Scripting.Dictionary")
+objComputerList.CompareMode = vbTextCompare
+
+' Open the log file for read access.
+Set objFSO = CreateObject("Scripting.FileSystemObject")
+Set objLog = objFSO.OpenTextFile(strLogFile, ForReading)
+
+' Output header line.
+Wscript.Echo "Computer Session,Startup,Shutdown,Duration (hh:mm:ss)"
+
+' Read each line of the log file.
+Do Until objLog.AtEndOfStream
+    strLine = Trim(objLog.ReadLine)
+    ' Skip blank lines.
+    If (strLine <> "") Then
+        ' Parse the line into semicolon delimited fields.
+        arrValues = Split(strLine, ";")
+        ' There should be at least 3 fields in each line.
+        If (UBound(arrValues) > 1) Then
+            ' Retrieve values.
+            strAction = Trim(arrValues(0))
+            strDate = Trim(arrValues(1))
+            strComputer = Trim(arrValues(2))
+            ' Check if this line logs a startup or shutdown event.
+            If (strAction = "Startup") Then
+               ' Check if the last event for this session was a Startup.
+                If (objComputerList.Exists(strComputer) = True) Then
+                    ' Shutdown event missing for previous Startup event.
+                    Wscript.Echo strComputer & "," _
+                        & objComputerList(strComputer) _
+                        & ",<unknown>,<unknown>"
+                End If
+                ' Track this session and Startup time
+                ' in the dictionary object.
+                objComputerList(strComputer) = strDate
+            End If
+            If (strAction = "Shutdown") Then
+                ' Check if the last event for this session was
+                ' a Startup.
+                If (objComputerList.Exists(strComputer) = True) Then
+                    ' Calculate how long the computer was authenticated.
+                    intDuration = (CDate(strDate) _
+                        - CDate(objComputerList(strComputer)))
+                    intDuration = intDuration * 24
+                    intHr = Fix(intDuration)
+                    intMin = Fix((intDuration - intHr) * 60)
+                    strSec = FormatNumber((((intDuration _
+                        - intHr) * 60) - intMin) * 60, 0)
+                    If (strSec = "60") Then
+                        intMin = intMin + 1
+                        strSec = "00"
+                    End If
+                    If (intMin = 60) Then
+                        intHr = intHr + 1
+                        intMin = 0
+                    End If
+                    ' Output Startup and Shutdown times and duration
+                    ' for this session.
+                    Wscript.Echo strComputer & "," _
+                        & objComputerList(strComputer) _
+                        & "," & strDate & "," _
+                        & Right("0" & CStr(intHr), 2) _
+                        & ":" & Right("0" & CStr(intMin), 2) _
+                        & ":" & Right("0" & strSec, 2)
+                    ' Remove entry for this session from dictionary
+                    ' object to indicate the computer is no longer
+                    ' authenticated.
+                    objComputerList.Remove(strComputer)
+                Else
+                    ' Previous Startup event missing.
+                    Wscript.Echo strComputer & ",<unknown>" _
+                        & "," & strDate & ",<unknown>"
+                End If
+            End If
+        Else
+            ' Wrong number of fields.
+            Wscript.Echo "Bad line: " & strLine
+        End If
+    End If
+Loop
+
+' Loop through computers still logged on at this time.
+For Each strComputer In objComputerList.Keys
+    Wscript.Echo strComputer & "," & objComputerList(strComputer) _
+        & ",<still authenticated>,<unknown>"
+Next
+
+' Clean up.
+objLog.Close

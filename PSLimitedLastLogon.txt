@@ -1,0 +1,72 @@
+# PSLimitedLastLogon.ps1
+# PowerShell program to determine when each user specified in a text
+# file last logged into the domain.
+#
+# ----------------------------------------------------------------------
+# Copyright (c) 2011 Richard L. Mueller
+# Hilltop Lab web site - http://www.rlmueller.net
+# Version 1.0 - May 20, 2011
+#
+# This program uses DS.DirectorySearcher to query AD for the 
+# lastLogonTimeStamp attribute of every user specified in a text file.
+# The user "pre-Windows 2000 logon" names (the value of the
+# sAMAccountName attribute) is read from the text file.
+#
+# You have a royalty-free right to use, modify, reproduce, and
+# distribute this script file in any way you find useful, provided that
+# you agree that the copyright owner above has no warranty, obligations,
+# or liability for such use.
+
+Trap {"Error: $_"; Break;}
+
+# Specify file of user "pre-Windows 2000 logon" names.
+$File = "c:\Scripts\Users.txt"
+
+$Domain = [System.DirectoryServices.ActiveDirectory.Domain]::GetCurrentDomain()
+$Searcher = New-Object System.DirectoryServices.DirectorySearcher
+$Searcher.PageSize = 200
+$Searcher.SearchScope = "subtree"
+$Searcher.SearchRoot = "LDAP://$Domain"
+
+# $Searcher.Filter = "(&(objectCategory=person)(objectClass=user))"
+$Searcher.PropertiesToLoad.Add("distinguishedName") > $Null
+$Searcher.PropertiesToLoad.Add("lastLogonTimeStamp") > $Null
+
+# Read User names.
+$Users = (Get-Content $File)
+
+# Filter on Users listed in file.
+$Filter = "(|"
+ForEach ($User In $Users)
+{
+    $Filter = $Filter + "(sAMAccountName=$User)"
+}
+$Filter = $Filter + ")"
+$Searcher.Filter = $Filter
+
+# Query Active Directory.
+$Results = $Searcher.FindAll()
+ForEach ($Result In $Results)
+{
+    # Retrieve attribute values.
+    $DN = $Result.Properties.Item("distinguishedName")
+    $LL = $Result.Properties.Item("lastLogonTimeStamp")
+    If ($LL.Count -eq 0)
+    {
+        $Last = [DateTime]0
+    }
+    Else
+    {
+        $Last = [DateTime]$LL.Item(0)
+    }
+    If ($Last -eq 0)
+    {
+        $LastLogon = $Last.AddYears(1600)
+    }
+    Else
+    {
+        $LastLogon = $Last.AddYears(1600).ToLocalTime()
+    }
+    # Output in comma delimited format.
+    """$DN"",$LastLogon"
+}

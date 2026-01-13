@@ -1,0 +1,238 @@
+' LimitedLastLogon.vbs
+' VBScript program to determine when each user specified in a text file
+' last logged into the domain.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2009 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - November 11, 2009
+'
+' This program uses ADO to query every Domain Controller in the domain
+' for the largest lastLogon value for each user. The user "pre-Windows
+' 2000 logon" names (the value of the sAMAccountName attribute) is read
+' from a text file.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim strFile, objFSO, objFile, objShell, lngBiasKey, lngBias, k
+Dim objRootDSE, strDNSDomain, adoCommand, adoConnection
+Dim strBase, strAttributes, strFilter, intCount, strName
+Dim strQuery, adoRecordset, strNTName, objDate, dtmDate
+Dim lngHigh, lngLow
+Dim strConfig, objDC, arrstrDCs(), objList, arrNames()
+
+Const ForReading = 1
+
+' Specify file of sAMAccountNames (pre-Windows 2000 logon names).
+strFile = "c:\Scripts\users.txt"
+
+' Open the text file for reading.
+Set objFSO = CreateObject("Scripting.FileSystemObject")
+Set objFile = objFSO.OpenTextFile(strFile, ForReading)
+
+' Read names from file into array.
+k = 0
+Do Until objFile.AtEndOfStream
+    strName = Trim(objFile.ReadLine)
+    ' Skip blank lines.
+    If (strName <> "") Then
+        ReDim Preserve arrNames(k)
+        arrNames(k) = strName
+        k = k + 1
+    End If
+Loop
+objFile.Close
+
+' Obtain local Time Zone bias from machine registry.
+' This bias changes with Daylight Savings Time.
+Set objShell = CreateObject("Wscript.Shell")
+lngBiasKey = objShell.RegRead("HKLM\System\CurrentControlSet\Control\" _
+    & "TimeZoneInformation\ActiveTimeBias")
+If (UCase(TypeName(lngBiasKey)) = "LONG") Then
+    lngBias = lngBiasKey
+ElseIf (UCase(TypeName(lngBiasKey)) = "VARIANT()") Then
+    lngBias = 0
+    For k = 0 To UBound(lngBiasKey)
+        lngBias = lngBias + (lngBiasKey(k) * 256^k)
+    Next
+End If
+Set objShell = Nothing
+
+' Use a dictionary object to track latest lastLogon for each user.
+Set objList = CreateObject("Scripting.Dictionary")
+objList.CompareMode = vbTextCompare
+
+' Setup ADO objects.
+Set adoCommand = CreateObject("ADODB.Command")
+Set adoConnection = CreateObject("ADODB.Connection")
+adoConnection.Provider = "ADsDSOObject"
+adoConnection.Open "Active Directory Provider"
+adoCommand.ActiveConnection = adoConnection
+
+' Search entire Active Directory domain.
+Set objRootDSE = GetObject("LDAP://RootDSE")
+strConfig = objRootDSE.Get("configurationNamingContext")
+strDNSDomain = objRootDSE.Get("defaultNamingContext")
+
+' Search the Configuration container of Active Directory.
+strBase = "<LDAP://" & strConfig & ">"
+
+' Filter on objects of class nTDSDSA. There is one such object
+' for each Domain Controller in the domain.
+strFilter = "(objectClass=nTDSDSA)"
+
+' Comma delimited list of attribute values to retrieve.
+strAttributes = "AdsPath"
+
+' Construct the LDAP syntax query.
+strQuery = strBase & ";" & strFilter & ";" & strAttributes & ";subtree"
+
+' Run the query.
+adoCommand.CommandText = strQuery
+adoCommand.Properties("Page Size") = 100
+adoCommand.Properties("Timeout") = 60
+adoCommand.Properties("Cache Results") = False
+
+Set adoRecordset = adoCommand.Execute
+
+' Enumerate parent objects of class nTDSDSA. Save Domain Controller
+' AdsPaths in dynamic array arrstrDCs.
+k = 0
+Do Until adoRecordset.EOF
+    Set objDC = _
+        GetObject(GetObject(adoRecordset.Fields("AdsPath").Value).Parent)
+    ReDim Preserve arrstrDCs(k)
+    arrstrDCs(k) = objDC.DNSHostName
+    k = k + 1
+    adoRecordset.MoveNext
+Loop
+adoRecordset.Close
+
+' Comma delimited list of attribute values to retrieve for users.
+strAttributes = "sAMAccountName,lastLogon"
+
+' Retrieve lastLogon attribute for each user on each Domain Controller.
+For k = 0 To Ubound(arrstrDCs)
+    ' Search the entire domain in the copy of Active Directory on the
+    ' specified Domain Controller.
+    strBase = "<LDAP://" & arrstrDCs(k) & "/" & strDNSDomain & ">"
+
+    ' Construct filter for user names using array of names.
+    intCount = 0
+    strFilter = "(|"
+    For Each strName in arrNames
+        ' Deal with 20 names at a time.
+        strFilter = strFilter & "(sAMAccountName=" & strName & ")"
+        If (intCount = 19) Then
+            strFilter = strFilter & ")"
+
+            ' Construct the LDAP syntax query.
+            strQuery = strBase & ";" & strFilter & ";" & strAttributes & ";subtree"
+            adoCommand.CommandText = strQuery
+
+            ' Run the query.
+            Set adoRecordset = adoCommand.Execute
+
+            ' Enumerate the resulting recordset.
+            Do Until adoRecordset.EOF
+                strNTName = adoRecordset.Fields("sAMAccountName").Value
+                On Error Resume Next
+                Set objDate = adoRecordset.Fields("lastLogon").Value
+                If (Err.Number <> 0) Then
+                    On Error GoTo 0
+                    dtmDate = #1/1/1601#
+                Else
+                    On Error GoTo 0
+                    lngHigh = objDate.HighPart
+                    lngLow = objDate.LowPart
+                    If (lngLow < 0) Then
+                        lngHigh = lngHigh + 1
+                    End If
+                    If (lngHigh = 0) And (lngLow = 0) Then
+                        dtmDate = #1/1/1601#
+                    Else
+                        dtmDate = #1/1/1601# + (((lngHigh * (2 ^ 32)) _
+                            + lngLow)/600000000 - lngBias)/1440
+                    End If
+                End If
+
+               ' Retain largest (latest) value for each user.
+                If (objList.Exists(strNTName) = True) Then
+                   If (dtmDate > objList(strNTName)) Then
+                        objList.Item(strNTName) = dtmDate
+                    End If
+                Else
+                    objList.Add strNTName, dtmDate
+                End If
+
+                adoRecordset.MoveNext
+            Loop
+            adoRecordset.Close
+            intCount = 0
+            strFilter = "(|"
+        Else
+            intCount = intCount + 1
+        End If
+    Next
+
+    ' Deal with any remaining names (less than 20).
+    If (intCount <> 0) Then
+        strFilter = strFilter & ")"
+
+        ' Construct the LDAP syntax query.
+        strQuery = strBase & ";" & strFilter & ";" & strAttributes & ";subtree"
+        adoCommand.CommandText = strQuery
+
+        ' Run the query.
+        Set adoRecordset = adoCommand.Execute
+
+        ' Enumerate the resulting recordset.
+        Do Until adoRecordset.EOF
+            strNTName = adoRecordset.Fields("sAMAccountName").Value
+            On Error Resume Next
+            Set objDate = adoRecordset.Fields("lastLogon").Value
+            If (Err.Number <> 0) Then
+                On Error GoTo 0
+                dtmDate = #1/1/1601#
+            Else
+                On Error GoTo 0
+                lngHigh = objDate.HighPart
+                lngLow = objDate.LowPart
+                If (lngLow < 0) Then
+                    lngHigh = lngHigh + 1
+                End If
+                If (lngHigh = 0) And (lngLow = 0) Then
+                    dtmDate = #1/1/1601#
+                Else
+                    dtmDate = #1/1/1601# + (((lngHigh * (2 ^ 32)) _
+                        + lngLow)/600000000 - lngBias)/1440
+                End If
+            End If
+
+            ' Retain largest (latest) value for each user.
+            If (objList.Exists(strNTName) = True) Then
+                If (dtmDate > objList(strNTName)) Then
+                    objList.Item(strNTName) = dtmDate
+                End If
+            Else
+                objList.Add strNTName, dtmDate
+            End If
+
+            adoRecordset.MoveNext
+        Loop
+        adoRecordset.Close
+    End If
+Next
+
+' Output latest lastLogon date for each user.
+For Each strNTName In objList.Keys
+    Wscript.Echo strNTName & " ; " & objList.Item(strNTName)
+Next
+
+' Clean up.
+adoConnection.Close

@@ -1,0 +1,117 @@
+# PSDocumentUsers.ps1
+# PowerShell script to document all users in Active Directory. Can be
+# used to create a comma delimited file that can be read into a
+# spreadsheet program.
+#
+# ----------------------------------------------------------------------
+# Copyright (c) 2011 Richard L. Mueller
+# Hilltop Lab web site - http://www.rlmueller.net
+# Version 1.0 - March 26, 2011
+#
+# You have a royalty-free right to use, modify, reproduce, and
+# distribute this script file in any way you find useful, provided that
+# you agree that the copyright owner above has no warranty, obligations,
+# or liability for such use.
+
+Trap {"Error: $_"; Break;}
+
+Function GetFlags ($lngValue)
+{
+    # Function to test bits of userAccountControl attribute.
+    # Returns settings that are True in semicolon delimited string.
+    $String = ""
+    If ($lngValue -band 2) {$String = "$String;User account disabled"}
+    If ($lngValue -band 8) {$String = "$String;Home directory required"}
+    If ($lngValue -band 16) {$String = "$String;Account currently locked"}
+    If ($lngValue -band 32) {$String = "$String;No password required"}
+    If ($lngValue -band 64) {$String = "$String;User cannot change password"}
+    If ($lngValue -band 128) {$String = "$String;User can send an encrypted password"}
+    If ($lngValue -band 256) {$String = "$String;Account for user in another domain (local user account)"}
+    If ($lngValue -band 512) {$String = "$String;Default account for typical user"}
+    If ($lngValue -band 2048) {$String = "$String;A ""permit to trust"" account fro a domain that ""trusts"" other domains"}
+    If ($lngValue -band 4096) {$String = "$String;Computer account"}
+    If ($lngValue -band 8192) {$String = "$String;Computer account for system backup domain controller"}
+    If ($lngValue -band 65536) {$String = "$String;Password does not expire"}
+    If ($lngValue -band 131072) {$String = "$String;MNS logon account"}
+    If ($lngValue -band 262144) {$String = "$String;User must logon using a smart card"}
+    If ($lngValue -band 524288) {$String = "$String;Service acccount under which a service runs, trusted for Kerberos"}
+    If ($lngValue -band 1048576) {$String = "$String;Security context will not be delegated to a service"}
+    If ($lngValue -band 2097152) {$String = "$String;Must use DES encryption type for keys"}
+    If ($lngValue -band 4194304) {$String = "$String;Account does not require Kerberos preauthentication for logon"}
+    If ($lngValue -band 8388608) {$String = "$String;User password has expired"}
+    If ($lngValue -band 16777216) {$String = "$String;Account enabled for delegation"}
+    $String = $String.Trim(";")
+    Return $String
+}
+
+# Search entire domain.
+$D = [System.DirectoryServices.ActiveDirectory.Domain]::GetCurrentDomain()
+$Domain = [ADSI]"LDAP://$D"
+$Searcher = New-Object System.DirectoryServices.DirectorySearcher
+$Searcher.PageSize = 200
+$Searcher.SearchScope = "subtree"
+
+# Filter on all user objects.
+$Searcher.Filter = "(&(objectCategory=person)(objectClass=user))"
+# Attribute values to retrieve.
+$Searcher.PropertiesToLoad.Add("distinguishedName") > $Null
+$Searcher.PropertiesToLoad.Add("sAMAccountName") > $Null
+$Searcher.PropertiesToLoad.Add("givenName") > $Null
+$Searcher.PropertiesToLoad.Add("sn") > $Null
+$Searcher.PropertiesToLoad.Add("description") > $Null
+$Searcher.PropertiesToLoad.Add("userAccountControl") > $Null
+$Searcher.PropertiesToLoad.Add("pwdLastSet") > $Null
+$Searcher.PropertiesToLoad.Add("telephoneNumber") > $Null
+$Searcher.PropertiesToLoad.Add("otherTelephone") > $Null
+$Searcher.SearchRoot = "LDAP://" + $Domain.distinguishedName
+
+# Output heading line.
+"""Distinguished Name"",""NT Name"",""First Name"",""Last Name"",""Description"",""Flags"",""Password Last Set"",""Telephone Number"",""Other Telephone Numbers"""
+
+$Results = $Searcher.FindAll()
+ForEach ($Result In $Results)
+{
+    $DN = $Result.Properties.Item("distinguishedName")
+    $NTName = $Result.Properties.Item("sAMAccountName")
+    $First = $Result.Properties.Item("givenName")
+    $Last = $Result.Properties.Item("sn")
+    $Phone = $Result.Properties.Item("telephoneNumber")
+
+    # The description attribute is multi-valued, but there is never
+    # more than one value in the array.
+    $Desc = $Result.Properties.Item("description")
+
+    # The otherTelephone attribute is multi-valued.
+    # List numbers delimited by semicolons.
+    $Phones = @($Result.Properties.Item("otherTelephone"))
+    $OtherPhone = $Phones -join ";"
+
+    # Test bits of userAccountControl.
+    $lngFlags = $Result.Properties.Item("userAccountControl")
+    $Flags = GetFlags $lngFlags.Item(0)
+
+    # Convert Integer8 value into date in current time zone.
+    $PLS = $Result.Properties.Item("pwdLastSet")
+    If ($PLS.Count -eq 0)
+    {
+        $Date = [DateTime]0
+    }
+    Else
+    {
+        # Interpret 64-bit integer as a date.
+        $Date = [DateTime]$PLS.Item(0)
+    }
+    If ($Date -eq 0)
+    {
+        # 0 really means never.
+        $PwdLastSet = "<Never>"
+    }
+    Else
+    {
+        # Convert from .NET ticks to Active Directory Integer8 ticks.
+        # Also, convert from UTC to local time.
+        $PwdLastSet = $Date.AddYears(1600).ToLocalTime()
+    }
+    # Display values comma delimited, enclosed in quotes.
+    """$DN"",""$NTName"",""$First"",""$Last"",""$Desc"",""$Flags"",""$PwdLastSet"",""$Phone"",""$OtherPhone"""
+}

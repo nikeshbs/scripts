@@ -1,0 +1,72 @@
+' ListObjectProperties.vbs
+' VBScript program to list all properties for a given Active Directory
+' object. All properties in the Schema are listed, whether assigned a
+' value or not. The values of the properties are not output. The program
+' requires the full AdsPath to an Active Directory object, using either
+' the WinNT provider or the LDAP provider. Each provider exposes
+' different properties.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2002-2010 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - November 10, 2002
+' Version 1.1 - February 19, 2003 - Standardize Hungarian notation.
+' Version 1.2 - January 25, 2004 - Modify error trapping.
+' Version 1.3 - November 6, 2010 - No need to set objects to Nothing.
+' This script is designed to be run at a command prompt, using the
+' Cscript host. The output can be redirected to a text file.
+' For example:
+' cscript //nologo ListObjectProperties.vbs "ADSPATH" > Properties.txt
+' ADSPATH can be similar to:
+'     "WinNT://MyDomain/TestUser,user"
+' or
+'     "LDAP://cn=TestUser,ou=Sales,dc=MyDomain,dc=com"
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim objADObject, strProperty, objClass, strAdsPath
+
+' Check for required argument.
+If (Wscript.Arguments.Count = 0) Then
+    Wscript.Echo "Error, required argument missing."
+    Wscript.Echo "ListObjectProperties.vbs"
+    Wscript.Echo "Program to list AD object properties"
+    Wscript.Echo "Syntax:"
+    Wscript.Echo "cscript ListObjectProperties.vbs ADSPATH > output.txt"
+    Wscript.Echo "where ADSPATH is the full AdsPath of an AD object."
+    Wscript.Echo "For example, ADSPATH could be:"
+    Wscript.Echo "  WinNT://MyDomain/TestUser,user"
+    Wscript.Echo "or"
+    Wscript.Echo "  LDAP://cn=TestUser,ou=Sales,dc=MyDomain,dc=com"
+    Wscript.Quit(1)
+End If
+
+strAdsPath = Wscript.Arguments(0)
+
+' Bind to Active Directory object.
+On Error Resume Next
+Set objADObject = GetObject(strAdsPath)
+If (Err.Number <> 0) Then
+    On Error GoTo 0
+    Wscript.Echo "Object not found in Active Directory"
+    Wscript.Echo strAdsPath
+    Wscript.Quit(1)
+End If
+On Error GoTo 0
+
+Set objClass = GetObject(objADObject.Schema)
+
+' Enumerate mandatory properties of the object.
+For Each strProperty In objClass.MandatoryProperties
+    Wscript.Echo "(M) " & strProperty
+Next
+
+' Enumerate optional properties of the object.
+For Each strProperty In objClass.OptionalProperties
+    Wscript.Echo "(O) " & strProperty
+Next

@@ -1,0 +1,148 @@
+# PSIsMember8.ps1
+# PowerShell program demonstrating the use of Function IsMember.
+#
+# ----------------------------------------------------------------------
+# Copyright (c) 2011 Richard L. Mueller
+# Hilltop Lab web site - http://www.rlmueller.net
+# Version 1.0 - May 14, 2011
+#
+# An efficient IsMember function to test security group membership for
+# any number of users or computers, using the "tokenGroups" attribute.
+# The function reveals membership in nested groups and the primary group.
+# Based on an idea by Joe Kaplan.
+#
+# You have a royalty-free right to use, modify, reproduce, and
+# distribute this script file in any way you find useful, provided that
+# you agree that the copyright owner above has no warranty, obligations,
+# or liability for such use.
+
+Trap {"Error: $_"; Break;}
+
+# Hash table of security groups memberships.
+$Script:GroupList = @{}
+
+Function IsMember($ADObject, $GroupName)
+{
+    # Function returns $True if $ADObject is a member of $GroupName, $False otherwise.
+    If ($Script:GroupList.Count -eq 0)
+    {
+        # Hash table has no entries. Setup DirectorySearcher.
+        # Search entire domain.
+        $Domain = [System.DirectoryServices.ActiveDirectory.Domain]::GetCurrentDomain()
+        $Root = $Domain.GetDirectoryEntry()
+        $Script:Searcher = [System.DirectoryServices.DirectorySearcher]$Root
+
+        $Script:Searcher.PageSize = 200
+        $Script:Searcher.SearchScope = "subtree"
+        $Script:Searcher.PropertiesToLoad.Add("sAMAccountName") > $Null
+
+        LoadGroups $ADObject
+    }
+    # Check if security group membership retrieved for $ADObject.
+    If ($Script:GroupList.ContainsKey($ADObject.sAMAccountName.ToString() + "\") -eq $False)
+    {
+        LoadGroups $ADObject
+    }
+    # Check if $ADObject is a member of $GroupName.
+    If ($Script:GroupList.ContainsKey($ADObject.sAMAccountName.ToString() + "\" + $GroupName))
+    {
+        Return $True
+    }
+    Else
+    {
+        Return $False
+    }
+}
+
+Function LoadGroups($ADObject)
+{
+    # Function to retrieve all security group memberships of $ADObject and
+    # populate the hash table.
+    # Add an entry for $ADObject so we can check if security membership retrieved.
+    $Script:GroupList.Add($ADObject.sAMAccountName.ToString() + "\", $True)
+
+    # Retrieve tokenGroups attribute, a multi-valued operational attribute.
+    # Each item in the tokenGroups collection is a SID value (a byte array).
+    $ADObject.psbase.RefreshCache("tokenGroups")
+    $SIDs = $ADObject.psbase.Properties.Item("tokenGroups")
+    # Create a filter to search for the groups with the corresponding objectSID values.
+    $Filter = "(|"
+    ForEach ($Value In $SIDs)
+    {
+        $HexSID = ""
+        # Convert each byte of the group SID into hex.
+        ForEach ($Byte In $Value)
+        {
+            $Hex = [Convert]::ToString($Byte, 16)
+            $HexSID = $HexSID + "\" + $Hex
+        }
+        $Filter = $Filter + "(objectSid=$HexSID)"
+    }
+    $Filter = $Filter + ")"
+    $Script:Searcher.Filter = $Filter
+
+    # Retrieve all security groups represented by SID values in tokenGroups.
+    $Results = $Script:Searcher.FindAll()
+    ForEach ($Result In $Results)
+    {
+        # Add the sAMAccountName of each group to the has table.
+        $Name = $Result.Properties.Item("sAMAccountName")
+        $Script:GroupList.Add($ADObject.sAMAccountName.ToString() + "\" + $Name, $True)
+    }
+}
+
+# Bind to the user object in Active Directory.
+$User = [ADSI]"LDAP://cn=TestUser,ou=Sales,dc=MyDomain,dc=com"
+
+# Bind to the computer object in Active Directory.
+$Computer = [ADSI]"LDAP://cn=TestComputer,ou=Sales,dc=MyDomain,dc=com"
+
+$GroupName = "Engineering"
+If (IsMember $User $GroupName -eq $True)
+{
+    "User " + $User.sAMAccountName + " is a member of group " + $GroupName
+}
+Else
+{
+    "User " + $User.sAMAccountName + " is NOT a member of group " + $GroupName
+}
+
+$GroupName = "Domain Users"
+If (IsMember $User $GroupName -eq $True)
+{
+    "User " + $User.sAMAccountName + " is a member of group " + $GroupName
+}
+Else
+{
+    "User " + $User.sAMAccountName + " is NOT a member of group " + $GroupName
+}
+
+$GroupName = "Front Office"
+If (IsMember $User $GroupName -eq $True)
+{
+    "User " + $User.sAMAccountName + " is a member of group " + $GroupName
+}
+Else
+{
+    "User " + $User.sAMAccountName + " is NOT a member of group " + $GroupName
+}
+
+$GroupName = "Front Office"
+If (IsMember $Computer $GroupName -eq $True)
+{
+    "Computer " + $Computer.sAMAccountName + " is a member of group " + $GroupName
+}
+Else
+{
+    "Computer " + $Computer.sAMAccountName + " is NOT a member of group " + $GroupName
+}
+
+$GroupName = "Domain Computers"
+If (IsMember $Computer $GroupName -eq $True)
+{
+    "Computer " + $Computer.sAMAccountName + " is a member of group " + $GroupName
+}
+Else
+{
+    "Computer " + $Computer.sAMAccountName + " is NOT a member of group " + $GroupName
+}

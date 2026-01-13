@@ -1,0 +1,73 @@
+' Ping4.vbs
+' VBScript program demonstrating how to ping remote computers to check
+' if they are available. Requires Windows NT or above.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2008 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - June 4, 2008
+' Version 1.1 - September 14, 2010 - Modify Ping function for IPv6.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim strComputer, objShell
+
+' Check for required argument.
+If (Wscript.Arguments.Count <> 1) Then
+    Wscript.Echo "Argument <ComputerName> required. For example" _
+        & vbCrLf & "cscript Ping4.vbs MyComputer"
+    Wscript.Quit
+End If
+
+' NetBIOS name or IP address of computer.
+strComputer = Wscript.Arguments(0)
+
+' The variable objShell is used by Function IsConnectible
+' and must have global scope.
+Set objShell = CreateObject("Wscript.Shell")
+
+' Ping computer to see if online.
+If (IsConnectible(strComputer, 1, 750) = True) Then
+    Wscript.Echo "Computer " & strComputer & " is available"
+Else
+    Wscript.Echo "Computer " & strComputer & " is NOT available"
+End If
+
+Function IsConnectible(ByVal strHost, ByVal intPings, ByVal intTO)
+    ' Returns True if strHost can be pinged.
+    ' strHost is the NetBIOS name or IP address of host computer.
+    ' intPings is number of echo requests to send.
+    ' intTO is timeout in milliseconds to wait for each reply.
+    ' Based on a program by Alex Angelopoulos and Torgeir Bakken,
+    ' as modified by Tom Lavedas.
+    ' Variable objShell has global scope and must be declared
+    ' and set in the main program.
+    ' Requires Windows NT or above.
+    ' Modified 09/14/2010 to search for "Reply from" instead of "TTL=".
+
+    Dim lngResult
+
+    If (intPings = "") Then
+        intPings = 2
+    End If
+    If (intTO = "") Then
+        intTO = 750
+    End If
+
+    lngResult = objShell.Run("%comspec% /c ping -n " & intPings _
+        & " -w " & intTO & " " & strHost _
+        & " | find ""Reply from"" > nul 2>&1", 0, True)
+
+    Select Case lngResult
+        Case 0
+            IsConnectible = True
+        Case Else
+            IsConnectible = False
+    End Select
+
+End Function

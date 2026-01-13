@@ -1,0 +1,56 @@
+' GetFromADCollection.vbs
+' VBScript program demonstrating how to retrieve a multi-valued property
+' from Active Directory.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2002-2010 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - November 10, 2002
+' Version 1.1 - February 19, 2003 - Standardize Hungarian notation.
+' Version 1.2 - January 25, 2004 - Modify error trapping.
+' Version 1.3 - November 6, 2010 - No need to set objects to Nothing.
+' The program displays the "OtherTelephone" attribute of a specified
+' user. This is a multi-valued attribute. It can have zero, one, or many
+' items in the collection, each a string value that is supposed to be a
+' telephone number. The Distinguished Name of the user is passed to the
+' program as a parameter.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim objUser, strOtherPhone, colstrOtherPhone, strNumber, strDN
+
+' Check for required argument.
+If (Wscript.Arguments.Count < 1) Then
+    Wscript.Echo "Required argument <Distinguished Name> missing. " _
+        & "For example:" & vbCrLf & "cscript GetFromADCollection.vbs " _
+        & "cn=TestUser,ou=Sales,dc=MyDomain,dc=com"
+    Wscript.Quit(0)
+End If
+
+' Bind to the user object with the LDAP provider.
+strDN = Wscript.Arguments(0)
+On Error Resume Next
+Set objUser = GetObject("LDAP://" & strDN)
+If (Err.Number <> 0) Then
+    On Error GoTo 0
+    Wscript.Echo "User not found" & vbCrLf & strDN
+    Wscript.Quit(1)
+End If
+On Error GoTo 0
+
+' Retrieve "otherTelephone" collection.
+colstrOtherPhone = objUser.GetEx("otherTelephone")
+
+' Enumerate items in the collection.
+strOtherPhone = "Other phone numbers for " & objUser.sAMAccountName
+For Each strNumber In colstrOtherPhone
+    strOtherPhone = strOtherPhone & vbCrLf & strNumber
+Next
+
+' Display collection.
+Wscript.Echo strOtherPhone

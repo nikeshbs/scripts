@@ -1,0 +1,65 @@
+# PSEnumUserGroups.ps1
+# PowerShell script to enumerate the groups a user belongs to.
+#
+# ----------------------------------------------------------------------
+# Copyright (c) 2011 Richard L. Mueller
+# Hilltop Lab web site - http://www.rlmueller.net
+# Version 1.0 - March 25, 2011
+# Version 1.1 - June 24, 2011 - Escape any "/" characters in DN's.
+#
+# Program uses a recursive method to enumerate all of the groups that
+# a user belongs to, including nested groups. The program does not
+# include the "primary" group of the user. The program outputs each
+# group's Distinguished Name. The output can be redirected to a text
+# file. The LDAP Distinguished Name of the user is passed to the
+# program as a parameter, or the program will prompt.
+#
+# You have a royalty-free right to use, modify, reproduce, and
+# distribute this script file in any way you find useful, provided that
+# you agree that the copyright owner above has no warranty, obligations,
+# or liability for such use.
+
+# Read user DN from command line or prompt for value.
+Param ($DN)
+If ($DN -eq $Null)
+{
+    $DN = Read-Host "User Distinguished Name"
+}
+
+Trap {"Error: $_"; Break;}
+
+Function EnumGroups ($ADObject, $Offset)
+{
+    # Recursive method to enumerate user group memberships.
+    # Includes nested group memberships.
+    $arrGroups = $ADObject.memberOf
+    If ($arrGroups.Count -eq 0)
+    {
+        Return
+    }
+    ForEach ($GroupDN In $arrGroups)
+    {
+        $GroupDN = $GroupDN.Replace("/", "\/")
+        $Group = [ADSI]"LDAP://$GroupDN"
+        If ($Script:GroupList.ContainsKey($GroupDN) -eq $False)
+        {
+            $Script:GroupList[$GroupDN] = $True
+            "$Offset$GroupDN"
+            EnumGroups $Group $($Offset + "--")
+        }
+        Else
+        {
+            "$OffSet$GroupDN (Duplicate)"
+        }
+    }
+}
+
+# Bind to user object.
+$DN = $DN.Replace("/", "\/")
+$User = [ADSI]"LDAP://$DN"
+
+# Hash table to track group memberships.
+$GroupList = @{}
+
+# Enumerate group memberships.
+EnumGroups $User ""
