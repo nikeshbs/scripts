@@ -1,0 +1,291 @@
+' Base64FileToText.vbs 
+' VBScript program to convert a base64 encoded file into a text string.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2010 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - January 7, 2010
+'
+' Syntax:
+'     cscript //nologo Base64FileToText.vbs <file name> <text>
+' where:
+'     <file name> is the name of the file to be decoded. Include the
+'         path if the file is not in the current folder. Enclose in
+'         quotes if there are spaces.
+'     <text> is an optional parameter indicating if the file contains
+'         lines delimited by carriage return line feed sequences. The
+'         default is "True" (or "T"), meaning the file can be read in
+'         lines. "False" (or "F") means the file must be read all at
+'         once.
+' If no parameters are supplied, the program will prompt.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim strValue64, strHexValue, strValue
+Dim strFile, objFSO, objFile, objChars
+Dim intLen, objRE, objMatches, objMatch, strText
+
+Const ForReading = 1
+
+Select Case Wscript.Arguments.Count
+    Case 0
+        strFile = InputBox("Enter file to be decoded", "Base64ToText.vbs")
+        strText = InputBox("Enter ""T"" if the file has separate lines." _
+            & vbCrLf & "Otherwise enter ""F"".", "Base64ToText.vbs", "T")
+    Case 1
+        strFile = Wscript.Arguments(0)
+        strText = "True"
+    Case 2
+        strFile = Wscript.Arguments(0)
+        strText = Wscript.Arguments(1)
+    Case Else
+        Wscript.Echo "Wrong number of arguments."
+        Call Syntax()
+        Wscript.Quit
+End Select
+
+' Check for syntax help.
+If (strFile = "/?") _
+        Or (strFile = "-?") _
+        Or (strFile = "?") _
+        Or (strFile = "/H") _
+        Or (strFile = "/h") _
+        Or (strFile = "-H") _
+        Or (strFile = "-h") _
+        Or (strFile = "/help") _
+        Or (strFile = "-help") Then
+    Call Syntax()
+    Wscript.Quit
+End If
+
+If (LCase(strText) = "t") Or (LCase(strText) = "true") then
+     strText = "True"
+ElseIf (LCase(strText) = "f") Or (LCase(strText) = "false") then
+    strText = "False"
+Else
+    Wscript.Echo "Invalid parameter: " & strText
+    Call Syntax()
+    Wscript.Quit
+End If
+
+' Setup dictionary object used to convert Base64 characters into
+' base 64 index integers.
+Set objChars = CreateObject("Scripting.Dictionary")
+objChars.CompareMode = vbBinaryCompare
+
+' Load dictionary object.
+Call LoadChars()
+
+' Open the Base64 file.
+Set objFSO = CreateObject("Scripting.FileSystemObject")
+On Error Resume Next
+Set objFile = objFSO.OpenTextFile(strFile, ForReading)
+If (Err.Number <> 0) Then
+    On Error GoTo 0
+    Wscript.Echo "File not found or unable to open: " & strFile
+    Call Syntax()
+    Wscript.Quit
+End If
+On Error GoTo 0
+
+' Prepare to validate each line of the file.
+Set objRE = New RegExp
+objRE.Pattern = "[A-Za-z0-9\+/]+[=]?[=]?"
+objRE.Global = True
+
+' Read the file.
+Do Until objFile.AtEndOfStream
+    If (strText = "True") Then
+        ' Read the file one line at a time.
+        strValue64 = objFile.ReadLine
+    Else
+        ' Read the file all at once.
+        strValue64 = objFile.ReadAll
+        ' Remove any carriage returns in the file.
+        strValue64 = Replace(strValue64, vbCrLf, "")
+        ' Remove any space characters in the file.
+        strValue64 = Replace(strValue64, " ", "")
+    End If
+
+    ' Validate the line.
+    intLen = Len(strValue64)
+    Set objMatches = objRE.Execute(strValue64)
+    If (objMatches.Count <> 1) Then
+        Wscript.Echo "Invalid Base64 line: " & strValue64
+        Wscript.Echo "Program aborted"
+        Wscript.Quit
+    End If
+    For Each objMatch In objMatches
+        If (objMatch.Length <> intLen) Then
+            Wscript.Echo "Invalid Base64 line: " & strValue64
+            Wscript.Echo "Program aborted"
+            Wscript.Quit
+        End If
+    Next
+    If (intLen Mod 4 <> 0) Then
+        Wscript.Echo "Base64 line invalid length: " & strValue64
+        Wscript.Echo "Program aborted"
+        Wscript.Quit
+    End If
+
+    ' Convert Base64 encoded line into hexadecimal bytes.
+    strHexValue = Base64ToHex(strValue64)
+    ' Convert hexadecimal bytes into text characters.
+    strValue = HexToText(strHexValue)
+    ' Output the text line.
+    Wscript.Echo strValue
+Loop
+objFile.Close
+
+Function HexToText(strHex)
+    ' Function to convert a string of hexadecimal bytes into a text string.
+    Dim strChar, k
+
+    HexToText = ""
+    For k = 1 To Len(strHex) Step 2
+        strChar = Mid(strHex, k, 2)
+        HexToText = HexToText & Chr("&H" & strChar)
+    Next
+End Function
+
+Function Base64ToHex(strValue)
+    ' Function to convert a base64 encoded string into a hex string.
+    Dim lngValue, lngTemp, lngChar, intLen, k, j, intTerm, strHex
+
+    intLen = Len(strValue)
+
+    ' Check padding.
+    intTerm = 0
+    If (Right(strValue, 1) = "=") Then
+        intTerm = 1
+    End If
+    If (Right(strValue, 2) = "==") Then
+        intTerm = 2
+    End If
+
+    ' Parse into groups of 4 6-bit characters.
+    j = 0
+    lngValue = 0
+    Base64ToHex = ""
+    For k = 1 To intLen
+        j = j + 1
+        ' Calculate 24-bit integer.
+        lngValue = (lngValue * 64) + objChars(Mid(strValue, k, 1))
+        If (j = 4) Then
+            ' Convert 24-bit integer into 3 8-bit bytes.
+            lngTemp = Fix(lngValue / 256)
+            lngChar = lngValue - (256 * lngTemp)
+            strHex = Right("00" & Hex(lngChar), 2)
+            lngValue = lngTemp
+
+            lngTemp = Fix(lngValue / 256)
+            lngChar = lngValue - (256 * lngTemp)
+            strHex = Right("00" & Hex(lngChar), 2) & strHex
+            lngValue = lngTemp
+
+            lngTemp = Fix(lngValue / 256)
+            lngChar = lngValue - (256 * lngTemp)
+            strHex = Right("00" & Hex(lngChar), 2) & strHex
+
+            Base64ToHex = Base64ToHex & strHex
+            j = 0
+            lngValue = 0
+        End If
+    Next
+    ' Account for padding.
+    Base64ToHex = Left(Base64ToHex, Len(Base64ToHex) - (intTerm * 2))
+
+End Function
+
+Sub LoadChars()
+    ' Subroutine to load dictionary object with information to convert
+    ' Base64 characters into base 64 index integers.
+    ' Object reference objChars has global scope.
+
+    objChars.Add "A", 0
+    objChars.Add "B", 1
+    objChars.Add "C", 2
+    objChars.Add "D", 3
+    objChars.Add "E", 4
+    objChars.Add "F", 5
+    objChars.Add "G", 6
+    objChars.Add "H", 7
+    objChars.Add "I", 8
+    objChars.Add "J", 9
+    objChars.Add "K", 10
+    objChars.Add "L", 11
+    objChars.Add "M", 12
+    objChars.Add "N", 13
+    objChars.Add "O", 14
+    objChars.Add "P", 15
+    objChars.Add "Q", 16
+    objChars.Add "R", 17
+    objChars.Add "S", 18
+    objChars.Add "T", 19
+    objChars.Add "U", 20
+    objChars.Add "V", 21
+    objChars.Add "W", 22
+    objChars.Add "X", 23
+    objChars.Add "Y", 24
+    objChars.Add "Z", 25
+    objChars.Add "a", 26
+    objChars.Add "b", 27
+    objChars.Add "c", 28
+    objChars.Add "d", 29
+    objChars.Add "e", 30
+    objChars.Add "f", 31
+    objChars.Add "g", 32
+    objChars.Add "h", 33
+    objChars.Add "i", 34
+    objChars.Add "j", 35
+    objChars.Add "k", 36
+    objChars.Add "l", 37
+    objChars.Add "m", 38
+    objChars.Add "n", 39
+    objChars.Add "o", 40
+    objChars.Add "p", 41
+    objChars.Add "q", 42
+    objChars.Add "r", 43
+    objChars.Add "s", 44
+    objChars.Add "t", 45
+    objChars.Add "u", 46
+    objChars.Add "v", 47
+    objChars.Add "w", 48
+    objChars.Add "x", 49
+    objChars.Add "y", 50
+    objChars.Add "z", 51
+    objChars.Add "0", 52
+    objChars.Add "1", 53
+    objChars.Add "2", 54
+    objChars.Add "3", 55
+    objChars.Add "4", 56
+    objChars.Add "5", 57
+    objChars.Add "6", 58
+    objChars.Add "7", 59
+    objChars.Add "8", 60
+    objChars.Add "9", 61
+    objChars.Add "+", 62
+    objChars.Add "/", 63
+
+End Sub
+
+Sub Syntax()
+    ' Subroutine to display syntax message.
+    Wscript.Echo "Syntax:"
+    Wscript.Echo "  cscript //nologo Base64FileToText.vbs <file name> <text>"
+    Wscript.Echo "where:"
+    Wscript.Echo "  <file name> is the name of a file. Include the path if"
+    Wscript.Echo "      the file is not in the current folder. Enclose in quotes"
+    Wscript.Echo "      if the value has embedded spaces"
+    Wscript.Echo "  <text> is optional. ""True"" or ""T"" (the default) indicates"
+    Wscript.Echo "      the file is text with lines separated by carriage returns."
+    Wscript.Echo "      ""False"" or ""F"" means the file must be read all at once."
+    Wscript.Echo "      The file still should be a text file."
+    Wscript.Echo "For example:"
+    Wscript.Echo "  cscript //nologo Base64FileToText.vbs ""c:\My Folder\Test.txt"" True"
+End Sub

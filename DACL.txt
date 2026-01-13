@@ -1,0 +1,231 @@
+' DACL.vbs
+' VBScript program to document object security.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2002-2010 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - November 10, 2002
+' Version 1.1 - February 19, 2003 - Standardize Hungarian notation.
+' Version 1.2 - March 30, 2007 - Document owner of Security Descriptor.
+' Version 1.3 - November 6, 2010 - No need to set objects to Nothing.
+' Program enumerates the ACE's within an Active Directory ACL for a
+' specified object. The DistinguishedName of the object is hardcoded in
+' the program. The output is written to a text file.
+' Based in part on a program (pg. 425-431) in the text "Windows NT/2000
+' ADSI Scripting for System Administration", by Thomas Eck, MacMillan
+' Technical Publishing, 2000.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim objADObject, objACE, objDiscretionaryACL, objSecurityDescriptor
+Dim strDistinguishedName, objFSO, objReport
+
+' Define constants.
+Const ADS_RIGHT_DELETE = &H10000
+Const ADS_RIGHT_READ_CONTROL = &H20000
+Const ADS_RIGHT_WRITE_DAC = &H40000
+Const ADS_RIGHT_OWNER = &H80000
+Const ADS_RIGHT_SYNCHRONIZE = &H100000
+Const ADS_RIGHT_ACCESS_SYSTEM_SECURITY = &H1000000
+Const ADS_RIGHT_GENERIC_READ = &H80000000
+Const ADS_RIGHT_GENERIC_WRITE = &H40000000
+Const ADS_RIGHT_GENERIC_EXECUTE = &H20000000
+Const ADS_RIGHT_GENERIC_ALL = &H10000000
+Const ADS_RIGHT_DS_CREATE_CHILD = &H1
+Const ADS_RIGHT_DS_DELETE_CHILD = &H2
+Const ADS_RIGHT_ACTRL_DS_LIST = &H4
+Const ADS_RIGHT_DS_SELF = &H8
+Const ADS_RIGHT_DS_READ_PROP = &H10
+Const ADS_RIGHT_DS_WRITE_PROP = &H20
+Const ADS_RIGHT_DS_DELETE_TREE = &H40
+Const ADS_RIGHT_DS_LIST_OBJECT = &H80
+Const ADS_RIGHT_DS_CONTROL_ACCESS = &H100
+
+' Open output text file with append access.
+Set objFSO = CreateObject("Scripting.FileSystemObject")
+Set objReport = objFSO.OpenTextFile("c:\MyFolder\Report.txt", _
+    8, True, 0)
+
+' Specify Distinguished Name of object to be documented.
+strDistinguishedName = "cn=TestUser,ou=Sales,dc=MyDomain,dc=com"
+
+' Bind to the object in Active Directory with the LDAP provider
+Set objADObject = GetObject("LDAP://" & strDistinguishedName)
+
+' Bind to the security objects.
+Set objSecurityDescriptor = objADObject.Get("ntSecurityDescriptor")
+Set objDiscretionaryACL = objSecurityDescriptor.discretionaryACL
+
+' Write header information to the output file.
+objReport.WriteLine "Active Directory Object:   " & objADObject.Name
+objReport.WriteLine "Security Descriptor Owner: " _
+    & objSecurityDescriptor.Owner
+objReport.WriteLine "---------------------------"
+
+' Enumerate each ACE in the DACL.
+For Each objACE In objDiscretionaryACL
+    objReport.WriteLine "Trustee: " & objACE.Trustee
+    objReport.WriteLine "      AceFlags  : " & objACE.AceFlags
+    objReport.WriteLine "      AceType   : " & objACE.AceType
+    objReport.WriteLine "      Flags     : " & objACE.Flags
+    objReport.WriteLine "      ObjectType: " & objACE.objectType
+    objReport.WriteLine "      AccessMask: " & objACE.AccessMask
+
+    ' Delete right.
+    ' Grants the right to delete the object.
+    If ((objACE.AccessMask And ADS_RIGHT_DELETE) <> 0) Then
+        Call ListRights(objACE, "ADS_RIGHT_DELETE")
+    End If
+
+    ' Read Control right.
+    ' Grants the right to read the object's security descriptor.
+    If ((objACE.AccessMask And ADS_RIGHT_READ_CONTROL) <> 0) Then
+        Call ListRights(objACE, "ADS_RIGHT_READ_CONTROL")
+    End If
+
+    ' Write DAC right.
+    ' Grants the right to modify the descretionary access control list.
+    If ((objACE.AccessMask And ADS_RIGHT_WRITE_DAC) <> 0) Then
+        Call ListRights(objACE, "ADS_RIGHT_WRITE_DAC")
+    End If
+
+    ' Right owner.
+    ' Grants the right to take ownership of the object.
+    If ((objACE.AccessMask And ADS_RIGHT_OWNER) <> 0) Then
+        Call ListRights(objACE, "ADS_RIGHT_OWNER")
+    End If
+
+    ' Synchronize right.
+    ' Enables the object to be used for synchronization.
+    If ((objACE.AccessMask And ADS_RIGHT_SYNCHRONIZE) <> 0) Then
+        Call ListRights(objACE, "ADS_RIGHT_SYNCHRONIZE")
+    End If
+
+    ' Access System Security right.
+    ' Grants the right to manipulate the object's SACL.
+    If ((objACE.AccessMask And ADS_RIGHT_ACCESS_SYSTEM_SECURITY) <> 0) Then
+        Call ListRights(objACE, "ADS_RIGHT_ACCESS_SYSTEM_SECURITY")
+    End If
+
+    ' Generic Read right.
+    ' Grants the right to read the security descriptor, all properties, and
+    ' any children of the object.
+    If ((objACE.AccessMask And ADS_RIGHT_GENERIC_READ) <> 0) Then
+        Call ListRights(objACE, "ADS_RIGHT_GENERIC_READ")
+    End If
+
+    ' Generic write right.
+    ' Grants the right to write to the DACL and all properties, as well as
+    ' to remove the object from the directory.
+    If ((objACE.AccessMask And ADS_RIGHT_GENERIC_WRITE) <> 0) Then
+        Call ListRights(objACE, "ADS_RIGHT_GENERIC_WRITE")
+    End If
+
+    ' Generic Execute right.
+    ' Grants the ability to list the object's children.
+    If ((objACE.AccessMask And ADS_RIGHT_GENERIC_EXECUTE) <> 0) Then
+        Call ListRights(objACE, "ADS_RIGHT_GENERIC_EXECUTE")
+    End If
+
+    ' Generic All right.
+    ' Grants the right to create or delete child objects and subtrees,
+    ' read and write all properties, and add or remove the object.
+    If ((objACE.AccessMask And ADS_RIGHT_GENERIC_ALL) <> 0) Then
+        Call ListRights(objACE, "ADS_RIGHT_GENERIC_ALL")
+    End If
+
+    ' DS Create Child right.
+    ' Grants the ability to create child objects.
+    ' If ObjectType is set to the schemaIDGuid of an object class, the right
+    ' is restricted to that object class.
+    If ((objACE.AccessMask And ADS_RIGHT_DS_CREATE_CHILD) <> 0) Then
+        Call ListRights(objACE, "ADS_RIGHT_DS_CREATE_CHILD")
+    End If
+
+    ' DS Delete Child right.
+    ' Grants the ability to delete child objects.
+    ' If ObjectType is set to the schemaIDGuid of an object class, the right
+    ' is restricted to that object class.
+    If ((objACE.AccessMask And ADS_RIGHT_DS_DELETE_CHILD) <> 0) Then
+        Call ListRights(objACE, "ADS_RIGHT_DS_DELETE_CHILD")
+    End If
+
+    ' Access Control DS List right.
+    ' Grants the ability to list all child objects.
+    If ((objACE.AccessMask And ADS_RIGHT_ACTRL_DS_LIST) <> 0) Then
+        Call ListRights(objACE, "ADS_RIGHT_ACTRL_DS_LIST")
+    End If
+
+    ' DS Self right.
+    ' Grants the ability to list the object itself.
+    If ((objACE.AccessMask And ADS_RIGHT_DS_SELF) <> 0) Then
+        Call ListRights(objACE, "ADS_RIGHT_DS_SELF")
+    End If
+
+    ' DS Read Property right.
+    ' Grants the ability to read object properties.
+    ' If ObjectType is set to the GUID of a property or property set, the
+    ' right is restricted to that property or property set.
+    If ((objACE.AccessMask And ADS_RIGHT_DS_READ_PROP) <> 0) Then
+        Call ListRights(objACE, "ADS_RIGHT_DS_READ_PROP")
+    End If
+
+    ' DS Write Property right.
+    ' Grants the ability to write object properties.
+    ' If ObjectType is set to the GUID of a property or property set, the
+    ' right is restricted to that property or property set.
+    If ((objACE.AccessMask And ADS_RIGHT_DS_WRITE_PROP) <> 0) Then
+        Call ListRights(objACE, "ADS_RIGHT_DS_WRITE_PROP")
+    End If
+
+    ' DS Delete Tree right.
+    ' Grants the ability to delete the object and all associated child
+    ' objects.
+    If ((objACE.AccessMask And ADS_RIGHT_DS_DELETE_TREE) <> 0) Then
+        Call ListRights(objACE, "ADS_RIGHT_DS_DELETE_TREE")
+    End If
+
+    ' DS List Object right.
+    ' Used to show or hide an object from user view.
+    If ((objACE.AccessMask And ADS_RIGHT_DS_LIST_OBJECT) <> 0) Then
+        Call ListRights(objACE, "ADS_RIGHT_DS_LIST_OBJECT")
+    End If
+
+    ' DS Control Access right.
+    ' Grants the ability to to perform an operation restricted by an
+    ' extended access right. Must specify a rights GUID identifying a
+    ' controlAccessRight object in the Extended-Rights container in the
+    ' configuration partition.
+    If ((objACE.AccessMask And ADS_RIGHT_DS_CONTROL_ACCESS) <> 0) Then
+        Call ListRights(objACE, "ADS_RIGHT_DS_CONTROL_ACCESS")
+    End If
+
+    objReport.WriteLine ""
+Next
+
+' Clean up.
+objReport.Close
+
+Wscript.Echo "Done"
+
+Sub ListRights(objACE_Item, strRight)
+    ' Subroutine to document rights to text file.
+    ' objReport is the output file object, with global scope.
+    If (objACE_Item.objectType = "") _
+            And (objACE_Item.InheritedObjectType = "") Then
+        objReport.WriteLine "  " & strRight
+    Else
+        If (objACE_Item.InheritedObjectType = "") Then
+            objReport.WriteLine "  " & strRight & " for SchemaIDGuid: " _
+                & objACE_Item.objectType
+        Else
+            objReport.WriteLine "  Inherited " & strRight _
+                & " for SchemaIDGuid: " & objACE_Item.InheritedObjectType
+        End If
+    End If
+End Sub

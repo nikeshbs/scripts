@@ -1,0 +1,425 @@
+' UpdateUsers.vbs
+' VBScript program to update users in bulk according to the information
+' in a Microsoft Excel spreadsheet.
+' The first row of the spreadsheet specifies the LDAP display names of
+' attributes. One of the attributes must be either distinguishedName or
+' sAMAccountName to uniquely identify the users.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2009 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - May 29, 2009 - Preliminary version that only supports
+' single-valued string attributes.
+' Version 1.1 - June 5, 2009 - Bug fix.
+' Version 1.2 - July 13, 2009 - Bug fix.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim objExcel, strExcelPath, objSheet
+Dim intRow, intCol
+Dim objUser, strUserDN
+Dim strNetBIOSDomain, strDNSDomain
+Dim objRootDSE, objTrans, strSchema
+Dim arrAttributes(), strAttribute, strValue
+Dim strSyntax, intMax, intID
+Dim blnFound, blnChanged
+Dim strOldValue, objSyntaxList
+Dim strLogFile, objFSO, objLog, intErrors
+Dim intUpdated, intUnchanged
+
+Const ADS_PROPERTY_CLEAR = 1
+' Constants for the NameTranslate object.
+Const ADS_NAME_INITTYPE_GC = 3
+Const ADS_NAME_TYPE_NT4 = 3
+Const ADS_NAME_TYPE_1779 = 1
+' Constants for log file.
+Const ForAppending = 8
+Const OpenAsASCII = 0
+Const CreateIfNotExist = True
+
+' Specify spreadsheet.
+strExcelPath = "c:\Scripts\UpdateUsers.xls"
+
+' Specify log file.
+strLogFile = "c:\Scripts\UpdateUsers.log"
+
+' Open the log file for appending.
+Set objFSO = CreateObject("Scripting.FileSystemObject")
+Set objLog = objFSO.OpenTextFile(strLogFile, _
+    ForAppending, CreateIfNotExist, OpenAsASCII)
+' Write to the log file.
+objLog.WriteLine "------------------------------------------"
+objLog.WriteLine "UpdateUsers.vbs Version 1.0 (May 29, 2009)"
+objLog.WriteLine "Started: " & CStr(Now())
+objLog.WriteLine "Spreadsheet: " & strExcelPath
+objLog.WriteLine "Log file: " & strLogFile
+
+' Setup dictionary object of attribute syntaxes.
+' The LDAP display names will be read from the spreadsheet.
+' The corresponding syntaxes will be read from the Schema container.
+Set objSyntaxList = CreateObject("Scripting.Dictionary")
+objSyntaxList.CompareMode = vbTextCompare
+
+' Determine DNS domain name from RootDSE object.
+On Error Resume Next
+Set objRootDSE = GetObject("LDAP://RootDSE")
+If (Err.Number <> 0) Then
+    On Error GoTo 0
+    objLog.WriteLine "## Domain not found"
+    objLog.WriteLine "Program aborted: " & CStr(Now())
+    objLog.Close
+    Wscript.Echo "Domain not found"
+    Wscript.Quit
+End If
+On Error GoTo 0
+
+strDNSDomain = objRootDSE.Get("DefaultNamingContext")
+' Retrieve DN of Schema container.
+strSchema = objRootDSE.Get("schemaNamingContext")
+
+' Use the NameTranslate object to find the NetBIOS domain name
+' from the DNS domain name.
+Set objTrans = CreateObject("NameTranslate")
+objTrans.Init ADS_NAME_INITTYPE_GC, ""
+objTrans.Set ADS_NAME_TYPE_1779, strDNSDomain
+strNetBIOSDomain = objTrans.Get(ADS_NAME_TYPE_NT4)
+' Remove trailing backslash.
+strNetBIOSdomain = Left(strNetBIOSDomain, Len(strNetBIOSDomain) - 1)
+
+' Open the spreadsheet.
+On Error Resume Next
+Set objExcel = CreateObject("Excel.Application")
+If (Err.Number <> 0) Then
+    On Error GoTo 0
+    objLog.WriteLine "## Excel Application not found"
+    objLog.WriteLine "Program aborted: " & CStr(Now())
+    objLog.Close
+    Wscript.Echo "Excel Application not found"
+    Wscript.Quit
+End If
+objExcel.Workbooks.Open strExcelPath
+If (Err.Number <> 0) Then
+    On Error GoTo 0
+    objLog.WriteLine "## Unable to open spreadsheet " & strExcelPath
+    objLog.WriteLine "Program aborted: " & CStr(Now())
+    objLog.Close
+    objExcel.Application.Quit
+    Wscript.Echo "Unable to open spreadsheet " & strExcelPath
+    Wscript.Quit
+End If
+On Error GoTo 0
+
+' Select the first worksheet.
+Set objSheet = objExcel.ActiveWorkbook.Worksheets(1)
+
+' Read the attribute display names from the first row.
+' Read until the first blank column is found.
+intRow = 1
+intCol = 1
+intID = 0
+Do While (objSheet.Cells(intRow, intCol).Value <> "")
+    ' Attribute names are case insensitive.
+    strAttribute = LCase(Trim(objSheet.Cells(intRow, intCol).Value))
+    ' Save attribute LDAP display names in array.
+    ReDim Preserve arrAttributes(intCol - 1)
+    arrAttributes(intCol - 1) = strAttribute
+    ' Save unique attribute names in dictionary object
+    ' to track syntaxes. Syntaxes will be retrieved later.
+    If (objSyntaxList.Exists(strAttribute) = False) Then
+         objSyntaxList(strAttribute) = ""
+    End If
+    ' Keep track of which column uniquely identifies users.
+    If (strAttribute = "distinguishedname") Then
+        intID = intCol
+    End If
+    ' If distinguishedName identifies users, then sAMAccountName
+    ' can be modified.
+    If (strAttribute = "samaccountname") And (intID = 0) Then
+        intID = intCol
+    End If
+    intCol = intCol + 1
+Loop
+
+If (intID = 0) Then
+    objLog.WriteLine "## No column found to identify users"
+    objLog.WriteLine "Program aborted: " & CStr(Now())
+    objLog.Close
+    objExcel.ActiveWorkbook.Close
+    objExcel.Application.Quit
+    Wscript.Echo "No column found to identify users"
+    Wscript.Quit
+End If
+
+' Keep track of the last column of the spreadsheet used.
+intMax = intCol - 1
+
+' Retrieve syntax of each attribute from the schema container
+' and save in dictionary object.
+Call GetSyntaxes
+
+' Check if any attributes are not found or syntaxes are not supported.
+blnFound = True
+For Each strAttribute In objSyntaxList.Keys
+    strSyntax = objSyntaxList(strAttribute)
+    If (strSyntax = "") Then
+        objLog.WriteLine "## Attribute " & strAttribute _
+            & " not found in schema"
+        Wscript.Echo "Attribute " & strAttribute _
+            & " not found in schema"
+        blnFound = False
+    End If
+    If (strSyntax = "NotSupported") Then
+        objLog.WriteLine "## Attribute " & strAttribute _
+            & " has a syntax that is not supported"
+        Wscript.Echo "Attribute " & strAttribute _
+            & " not supported"
+        blnFound = False
+    End If
+    If (strSyntax = "Constructed") Then
+        objLog.WriteLine "## Attribute " & strAttribute _
+            & " is operational, so is not supported"
+        Wscript.Echo "Attribute " & strAttribute _
+            & " not supported"
+        blnFound = False
+    End If
+Next
+If (blnFound = False) Then
+    objLog.WriteLine "Program aborted: " & CStr(Now())
+    objLog.Close
+    objExcel.ActiveWorkbook.Close
+    objExcel.Application.Quit
+    Wscript.Echo "Program aborted"
+    Wscript.Quit
+End If
+
+' Read remaining rows of the spreadsheet until the first blank value
+' is found in the column that identifies users.
+intRow = 2
+intErrors = 0
+intUpdated = 0
+intUnchanged = 0
+Do While (objSheet.Cells(intRow, intID).Value <> "")
+    ' Update a user. Read identifying column for this user.
+    strValue = Trim(objSheet.Cells(intRow, intID).Value)
+    Wscript.Echo "Processing: " & strValue
+    blnFound = False
+    If (arrAttributes(intID - 1) = "distinguishedname") Then
+        ' Bind to the user object.
+        ' ADSI requires that the forward slash character be escaped.
+        On Error Resume Next
+        Set objUser = GetObject("LDAP://" & Replace(strValue, "/", "\/"))
+        If (Err.Number = 0) Then
+            On Error GoTo 0
+            blnFound = True
+        Else
+            On Error GoTo 0
+            objLog.WriteLine "## User not found: " & strValue
+            intErrors = intErrors + 1
+        End If
+    End If
+    If (arrAttributes(intID - 1) = "samaccountname") Then
+        ' Convert sAMAccountName to distinguishedName.
+        ' Use Set method of NameTranslate object to specify
+        ' the NT format of the user name.
+        On Error Resume Next
+        objTrans.Set ADS_NAME_TYPE_NT4, strNetBIOSDomain _
+            & "\" & strValue
+        If (Err.Number = 0) Then
+            On Error GoTo 0
+            ' Use the Get method to retrieve the Distinguished Name.
+            strUserDN = objTrans.Get(ADS_NAME_TYPE_1779)
+            ' ADSI requires that the forward slash character be escaped.
+            strUserDN = Replace(strUserDN, "/", "\/")
+            ' Bind to the user object.
+            Set objUser = GetObject("LDAP://" & strUserDN)
+            blnFound = True
+        Else
+            On Error GoTo 0
+            objLog.WriteLine "## User not found: " _
+                & strNetBIOSDomain & "\" & strValue
+            intErrors = intErrors + 1
+        End If
+    End If
+    If (blnFound = True) Then
+        ' User found.
+        ' Read remaining values for this user.
+        blnChanged = False
+        For intCol = 1 To intMax
+            ' Skip the identifying column.
+            If (intCol <> intID) Then
+                ' Retrieve attribute name for this column
+                ' from array.
+                strAttribute = arrAttributes(intCol - 1)
+                ' Retrieve attribute syntax from dictionary object.
+                strSyntax = objSyntaxList(strAttribute)
+                ' Attribute values are case sensitive.
+                ' Leading and trialing blanks allowed.
+                strValue = objSheet.Cells(intRow, intCol).Value
+                ' Do nothing if the value is missing or blank.
+                If (Trim(strValue) <> "") Then
+                    ' All other attributes are handled based
+                    ' on syntax.
+                    Select Case strSyntax
+                        Case "string"
+                            ' Single-value string attribute.
+                            ' Retrieve old attribute value.
+                            ' An error is raised if there is
+                            ' no value (the attribute is not set).
+                            On Error Resume Next
+                            strOldValue = objUser.Get(strAttribute)
+                            If (Err.Number <> 0) Then
+                                On Error GoTo 0
+                                strOldValue = ""
+                            End If
+                            On Error GoTo 0
+                            If (Trim(LCase(strValue)) = ".delete") Then
+                                If (strOldValue <> "") Then
+                                    If (strAttribute = "samaccountname") Then
+                                        ' Mandatory attribute.
+                                        objLog.WriteLine "## Mandatory attribute " _
+                                            & "sAMAccountName cannot be cleared " _
+                                            & "for user: " & objUser.distinguishedName
+                                        intErrors = intErrors + 1
+                                    Else
+                                        ' Value should be cleared.
+                                        objUser.PutEx ADS_PROPERTY_CLEAR, _
+                                            strAttribute, 0
+                                        blnChanged = True
+                                    End If
+                                End If
+                            ElseIf (strValue <> strOldValue) Then
+                                ' Assign new value.
+                                objUser.Put strAttribute, strValue
+                                blnChanged = True
+                            End If
+                        Case Else
+                            ' Syntax not recognized.
+                            ' Unexpected error.
+                            objLog.WriteLine "## Unexpected syntax: " & strSyntax _
+                                & " for attribute: " & strAttribute _
+                                & " for user: " & objUser.distinguishedName
+                            intErrors = intErrors + 1
+                    End Select
+                End If    ' strValue not blank.
+            End If    ' Not an ID column.
+        Next    ' Enumerate columns.
+        If (blnChanged = True) Then
+            ' Save changes to AD.
+            On Error Resume Next
+            objUser.SetInfo
+            If (Err.Number <> 0) Then
+                On Error GoTo 0
+                objLog.WriteLine "## Unable to update user " _
+                    & Trim(objSheet.Cells(intRow, intID).Value)
+                intErrors = intErrors + 1
+            Else
+                On Error GoTo 0
+                objLog.WriteLine "Updated user: " _
+                    & objUser.distinguishedName
+                intUpdated = intUpdated + 1
+            End If
+        Else
+            objLog.WriteLine "User unchanged: " _
+                & objUser.distinguishedName
+            intUnchanged = intUnchanged + 1
+        End If
+    End If    ' User found.
+    intRow = intRow + 1
+Loop
+
+Wscript.Echo "Done"
+Wscript.Echo "Number of errors: " & CStr(intErrors)
+Wscript.Echo "See log file: " & strLogFile
+objLog.WriteLine "Finished: " & CStr(Now())
+objLog.WriteLine "Number of users updated: " & CStr(intUpdated)
+objLog.WriteLine "Number of users unchanged: " & CStr(intUnchanged)
+objLog.WriteLine "Number of errors: " & CStr(intErrors)
+
+' Clean up.
+objLog.Close
+objExcel.ActiveWorkbook.Close
+objExcel.Application.Quit
+
+Sub GetSyntaxes()
+    ' Subroutine to retrieve syntax of each AD attribute in a dictionary
+    ' object. objSyntaxList must be declared in the main program and have
+    ' global scope. Key value in objSyntaxList is the LDAP display name
+    ' of the attribute. The item value will be blank if the attribute is
+    ' not found in the schema, will be "Constructed" if the attribute is
+    ' operational, will be the name of the syntax if the syntax is
+    ' supported by this program, or will be "NotSupported" if the attribute
+    ' is recognized but the syntax is not supported.
+
+    Dim adoConnection, adoCommand, adoRecordset
+    Dim strFilter, strQuery, intSysFlags, strSyntaxNum, strSingleValued
+    Dim strAttribute, strAttrs, strBase
+    Dim strSyntax, strName
+
+    ' Constant for constructed AD attribute.
+    Const ADS_SYSTEMFLAG_ATTR_IS_CONSTRUCTED = &H4
+
+    ' Setup ADO objects to search for AD attributes.
+    Set adoConnection = CreateObject("ADODB.Connection")
+    Set adoCommand = CreateObject("ADODB.Command")
+    adoConnection.Provider = "ADsDSOOBject"
+    adoConnection.Open "Active Directory Provider"
+    Set adoCommand.ActiveConnection = adoConnection
+    adoCommand.Properties("Page Size") = 100
+    adoCommand.Properties("Timeout") = 30
+    adoCommand.Properties("Cache Results") = False
+
+    ' Search the schema container.
+    strBase = "<LDAP://" & strSchema & ">"
+
+    ' Comma delimited list of attribute values to retrieve.
+    strAttrs = "lDAPDisplayName,attributeSyntax,isSingleValued,systemFlags"
+
+    ' Construct the filter to query for all attributes in the array.
+    strFilter = ""
+    For Each strAttribute In objSyntaxList.Keys
+        If (strFilter = "") Then
+            strFilter = "(&(objectCategory=AttributeSchema)(|(lDAPDisplayName=" _
+                & strAttribute & ")"
+        Else
+            strFilter = strFilter & "(lDAPDisplayName=" _
+                & strAttribute & ")"
+        End If
+    Next
+    strFilter = strFilter & "))"
+
+    ' Query AD.
+    strQuery = strBase & ";" & strFilter & ";" & strAttrs & ";subtree"
+    adoCommand.CommandText = strQuery
+
+    ' Enumerate the resulting recordset.
+    Set adoRecordset = adoCommand.Execute
+    Do Until adoRecordset.EOF
+        ' Retrieve values for this attribute.
+        strName = adoRecordset.Fields("lDAPDisplayName").Value
+        intSysFlags = adoRecordset.Fields("systemFlags").Value
+        strSyntaxNum = adoRecordset.Fields("attributeSyntax").Value
+        strSingleValued = adoRecordset.Fields("isSingleValued").Value
+        Select Case strSyntaxNum
+            Case "2.5.5.12"
+                strSyntax = "string"
+            Case Else
+                strSyntax = "NotSupported"
+        End Select
+        If ((intSysFlags And ADS_SYSTEMFLAG_ATTR_IS_CONSTRUCTED) <> 0) Then
+            objSyntaxList(strName) = "Constructed"
+        Else
+            If (strSingleValued = "True") Then
+                objSyntaxList(strName) = strSyntax
+            Else
+                objSyntaxList(strName) = "NotSupported"
+            End If
+        End If
+        adoRecordset.MoveNext
+    Loop
+    adoRecordset.Close
+End Sub

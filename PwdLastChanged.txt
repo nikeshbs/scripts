@@ -1,0 +1,150 @@
+' PwdLastChanged.vbs
+' VBScript program to determine when each user in the domain last
+' changed their password. The program can be modified to determine
+' when computer objects last had their password changed by the system.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2003-2010 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - April 27, 2003
+' Version 1.1 - May 9, 2003 - Account for error in IADsLargeInteger
+'                             property methods HighPart and LowPart.
+' Version 1.2 - January 25, 2004 - Modify error trapping.
+' Version 1.3 - April 24, 2007 - Bug fix.
+' Version 1.4 - July 6, 2007 - Modify how IADsLargeInteger interface
+'                              is invoked.
+' Version 1.5 - December 29, 2009 - Modify function Integer8Date.
+' Version 1.6 - November 6, 2010 - No need to set objects to Nothing.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Const ADS_UF_PASSWD_CANT_CHANGE = &H40
+Const ADS_UF_DONT_EXPIRE_PASSWD = &H10000
+
+Dim strFilePath, objFSO, objFile, adoConnection, adoCommand
+Dim objRootDSE, strDNSDomain, strFilter, strQuery, adoRecordset
+Dim strDN, objShell, lngBiasKey, lngBias, blnPwdExpire
+Dim objDate, dtmPwdLastSet, lngFlag, k
+
+' Check for required arguments.
+If (Wscript.Arguments.Count < 1) Then
+    Wscript.Echo "Arguments <FileName> required. For example:" & vbCrLf _
+        & "cscript PwdLastChanged.vbs c:\MyFolder\UserList.txt"
+    Wscript.Quit(0)
+End If
+
+strFilePath = Wscript.Arguments(0)
+Set objFSO = CreateObject("Scripting.FileSystemObject")
+
+' Open the file for write access.
+On Error Resume Next
+Set objFile = objFSO.OpenTextFile(strFilePath, 2, True, 0)
+If (Err.Number <> 0) Then
+    On Error GoTo 0
+    Wscript.Echo "File " & strFilePath & " cannot be opened"
+    Wscript.Quit(1)
+End If
+On Error GoTo 0
+
+' Obtain local time zone bias from machine registry.
+' This bias changes with Daylight Savings Time.
+Set objShell = CreateObject("Wscript.Shell")
+lngBiasKey = objShell.RegRead("HKLM\System\CurrentControlSet\Control\" _
+    & "TimeZoneInformation\ActiveTimeBias")
+If (UCase(TypeName(lngBiasKey)) = "LONG") Then
+    lngBias = lngBiasKey
+ElseIf (UCase(TypeName(lngBiasKey)) = "VARIANT()") Then
+    lngBias = 0
+    For k = 0 To UBound(lngBiasKey)
+        lngBias = lngBias + (lngBiasKey(k) * 256^k)
+    Next
+End If
+
+' Use ADO to search the domain for all users.
+Set adoConnection = CreateObject("ADODB.Connection")
+Set adoCommand = CreateObject("ADODB.Command")
+adoConnection.Provider = "ADsDSOOBject"
+adoConnection.Open "Active Directory Provider"
+Set adoCommand.ActiveConnection = adoConnection
+
+' Determine the DNS domain from the RootDSE object.
+Set objRootDSE = GetObject("LDAP://RootDSE")
+strDNSDomain = objRootDSE.Get("DefaultNamingContext")
+
+' Filter to retrieve all user objects.
+strFilter = "(&(objectCategory=person)(objectClass=user))"
+
+' Filter to retrieve all computer objects.
+' strFilter = "(objectCategory=computer)"
+
+strQuery = "<LDAP://" & strDNSDomain & ">;" & strFilter _
+    & ";distinguishedName,pwdLastSet,userAccountControl;subtree"
+
+adoCommand.CommandText = strQuery
+adoCommand.Properties("Page Size") = 100
+adoCommand.Properties("Timeout") = 30
+adoCommand.Properties("Cache Results") = False
+
+' Enumerate all users. Write each user's Distinguished Name,
+' whether they are allowed to change their password, and when
+' they last changed their password to the file.
+Set adoRecordset = adoCommand.Execute
+Do Until adoRecordset.EOF
+    strDN = adoRecordset.Fields("distinguishedName").Value
+    lngFlag = adoRecordset.Fields("userAccountControl").Value
+    blnPwdExpire = True
+    If ((lngFlag And ADS_UF_PASSWD_CANT_CHANGE) <> 0) Then
+        blnPwdExpire = False
+    End If
+    If ((lngFlag And ADS_UF_DONT_EXPIRE_PASSWD) <> 0) Then
+        blnPwdExpire = False
+    End If
+    ' The pwdLastSet attribute should always have a value assigned,
+    ' but other Integer8 attributes representing dates could be "Null".
+    If (TypeName(adoRecordset.Fields("pwdLastSet").Value) = "Object") Then
+        Set objDate = adoRecordset.Fields("pwdLastSet").Value
+        dtmPwdLastSet = Integer8Date(objDate, lngBias)
+    Else
+        dtmPwdLastSet = #1/1/1601#
+    End If
+    objFile.WriteLine strDN & " ; " & blnPwdExpire & " ; " & dtmPwdLastSet
+    adoRecordset.MoveNext
+Loop
+adoRecordset.Close
+
+' Clean up.
+objFile.Close
+adoConnection.Close
+
+Wscript.Echo "Done"
+
+Function Integer8Date(ByVal objDate, ByVal lngBias)
+    ' Function to convert Integer8 (64-bit) value to a date, adjusted for
+    ' local time zone bias.
+    Dim lngAdjust, lngDate, lngHigh, lngLow
+    lngAdjust = lngBias
+    lngHigh = objDate.HighPart
+    lngLow = objdate.LowPart
+    ' Account for error in IADsLargeInteger property methods.
+    If (lngLow < 0) Then
+        lngHigh = lngHigh + 1
+    End If
+    If (lngHigh = 0) And (lngLow = 0) Then
+        lngAdjust = 0
+    End If
+    lngDate = #1/1/1601# + (((lngHigh * (2 ^ 32)) _
+        + lngLow) / 600000000 - lngAdjust) / 1440
+    ' Trap error if lngDate is ridiculously huge.
+    On Error Resume Next
+    Integer8Date = CDate(lngDate)
+    If (Err.Number <> 0) Then
+        On Error GoTo 0
+        Integer8Date = #1/1/1601#
+    End If
+    On Error GoTo 0
+End Function

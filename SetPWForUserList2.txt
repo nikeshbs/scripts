@@ -1,0 +1,88 @@
+' SetPWForUserList2.vbs
+' VBScript program to set the password for a text list of users.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2002-2010 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - November 10, 2002
+' Version 1.1 - February 19, 2003 - Standardize Hungarian notation.
+' Version 1.2 - January 25, 2004 - Modify error trapping.
+' Version 1.3 - November 6, 2010 - No need to set objects to Nothing.
+' The input text file is a list of the Distinguished Name of each user
+' whose password will be set, one name per line. The program
+' CreateUserList2.vbs can be used to create the file, which should then
+' be modified to include only those users whose passwords will be set.
+' The file can also be created manually. Each user's new password should
+' be added after their Distinguished Name, separated by the pipe symbol,
+' "|". For example, one line of the text file could be:
+'
+' cn=TestUser,ou=Sales,dc=MyDomain,dc=com|newpassword
+'
+' The program sets the password for each user, enables the account, and
+' expires the password so the user must change their password the next
+' time they logon.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim strPassword, objUser, objFSO, strFilePath, objFile
+Dim strLine, intIndex, strUserDN
+
+Const ForReading = 1
+
+' Specify the text file of user names.
+strFilePath = "c:\MyFolder\UserList2.txt"
+
+' Open the file for read access.
+Set objFSO = CreateObject("Scripting.FileSystemObject")
+Set objFile = objFSO.OpenTextFile(strFilePath, ForReading)
+
+' Read each line of the file, bind to the user object, set the user
+' password, enable the account, and set the password expired.
+' Each line should have the user Distinguished Name and password,
+' separated by "|".
+Do Until objFile.AtEndOfStream
+    strLine = objFile.ReadLine
+    If (strLine <> "") Then
+        intIndex = InStr(strLine, "|")
+        If (intIndex = 0) Then
+            Wscript.Echo "Syntax error in line: " & strLine
+        Else
+            strUserDN = Trim(Left(strLine, intIndex - 1))
+            strPassword = Trim(Mid(strLine, intIndex + 1))
+            On Error Resume Next
+            Set objUser = GetObject("LDAP://" & strUserDN)
+            If (Err.Number <> 0) Then
+                On Error GoTo 0
+                Wscript.Echo "User NOT found: " & strUserDN
+            Else
+                objUser.SetPassword strPassword
+                If (Err.Number <> 0) Then
+                    On Error GoTo 0
+                    Wscript.Echo "Password NOT set for: " & strUserDN
+                Else
+                    On Error GoTo 0
+                    objUser.AccountDisabled = False
+                    objUser.Put "pwdLastSet", 0
+                    On Error Resume Next
+                    objUser.SetInfo
+                    If (Err.Number <> 0) Then
+                        On Error GoTo 0
+                        Wscript.Echo "Unable to set attributes for user: " _
+                            & strUserDN
+                    End If
+                    On Error GoTo 0
+                End If
+            End If
+        End If
+    End If
+Loop
+
+' Clean up.
+objFile.Close
+
+Wscript.Echo "Done"

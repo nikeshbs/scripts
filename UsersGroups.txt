@@ -1,0 +1,150 @@
+' UsersGroups.vbs
+' VBScript program to document security group membership of all users.
+' Reveals nested group and primary group membership. Does not reveal
+' distribution group membership or cross-domain group membership.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2009 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - May 8, 2009
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim adoCommand, adoConnection, strBase, strFilter, strAttributes
+Dim objRootDSE, strDNSDomain, strQuery, adoRecordset, strName, strDN
+Dim strExcelpath, objExcel, objSheet, intRow, intCol, objUser
+Dim arrbytSIDs, objGroupList, j, arrstrGroupSIDs(), objGroup
+Dim strGroupName
+
+' Spreadsheet file name to be created.
+strExcelPath = "c:\Scripts\UsersGroups.xls"
+
+' Bind to Excel.
+Set objExcel = CreateObject("Excel.Application")
+
+' Create new workbook.
+objExcel.Workbooks.Add
+
+' Bind to worksheet.
+Set objSheet = objExcel.ActiveWorkbook.Worksheets(1)
+objSheet.Name = "Domain Users"
+
+' Write column headings.
+objSheet.Cells(1, 1).Value = "sAMAccountName"
+objSheet.Cells(1, 2).Value = "Distinguished Name"
+objSheet.Cells(1, 3).Value = "Group Memberships"
+
+' Dictionary object to keep track of group SID values.
+Set objGroupList = CreateObject("Scripting.Dictionary")
+objGroupList.CompareMode = vbTextCompare
+
+' Setup ADO objects.
+Set adoCommand = CreateObject("ADODB.Command")
+Set adoConnection = CreateObject("ADODB.Connection")
+adoConnection.Provider = "ADsDSOObject"
+adoConnection.Open "Active Directory Provider"
+adoCommand.ActiveConnection = adoConnection
+
+' Search entire Active Directory domain.
+Set objRootDSE = GetObject("LDAP://RootDSE")
+strDNSDomain = objRootDSE.Get("defaultNamingContext")
+strBase = "<LDAP://" & strDNSDomain & ">"
+
+' Filter on user objects.
+strFilter = "(&(objectCategory=person)(objectClass=user))"
+
+' Comma delimited list of attribute values to retrieve.
+' Cannot retrieve tokenGroups with ADO.
+strAttributes = "sAMAccountName,distinguishedName"
+
+' Construct the LDAP syntax query.
+strQuery = strBase & ";" & strFilter & ";" & strAttributes & ";subtree"
+adoCommand.CommandText = strQuery
+adoCommand.Properties("Page Size") = 100
+adoCommand.Properties("Timeout") = 30
+adoCommand.Properties("Cache Results") = False
+
+' Run the query.
+Set adoRecordset = adoCommand.Execute
+
+' Enumerate the resulting recordset.
+intRow = 2
+Do Until adoRecordset.EOF
+    ' Retrieve values and display.
+    strName = adoRecordset.Fields("sAMAccountName").Value
+    objSheet.Cells(intRow, 1).Value = strName
+    strDN = adoRecordset.Fields("distinguishedName").Value
+    strDN = Replace(strDN, "/", "\/")
+    objSheet.Cells(intRow, 2).Value = strDN
+    ' Bind to the user object.
+    Set objUser = GetObject("LDAP://" & strDN)
+    ' Retrieve tokenGroups attribute.
+    objUser.GetInfoEx Array("tokenGroups"), 0
+    arrbytSIDs = objUser.Get("tokenGroups")
+    If (UBound(arrbytSIDs) = -1) Then
+        ' No group SID values, do nothing.
+    ElseIf (TypeName(arrbytSIDs) = "Byte()") Then
+        ' One group SID.
+        ReDim arrstrGroupSIDs(0)
+        arrstrGroupSIDs(0) = OctetToHexStr(arrbytSIDs)
+        ' Check if this group encountered before.
+        If (objGroupList.Exists(arrstrGroupSIDs(0)) = False) Then
+            ' Save group SID and name in dictionary object.
+            Set objGroup = GetObject("LDAP://<SID=" & arrstrGroupSIDs(0) & ">")
+            strGroupName = objGroup.distinguishedName
+            objGroupList.Add arrstrGroupSIDs, strGroupName
+            objSheet.Cells(intRow, 3).Value = strGroupName
+        Else
+            ' Retrieve group name from dictionary object.
+            strGroupName = objGroupList(arrstrGroupSIDs(0))
+            objSheet.Cells(intRow, 3).Value = strGroupName
+        End If
+    Else
+        ' More than one SID value in the array.
+        intCol = 3
+        ReDim arrstrGroupSIDs(UBound(arrbytSIDs))
+        For j = 0 To UBound(arrbytSIDs)
+            arrstrGroupSIDs(j) = OctetToHexStr(arrbytSIDs(j))
+            ' Check if this group encountered before.
+            If (objGroupList.Exists(arrstrGroupSIDs(j)) = False) Then
+                ' Save group SID and name in dictionary object.
+                Set objGroup = GetObject("LDAP://<SID=" & arrstrGroupSIDs(j) & ">")
+                strGroupName = objGroup.distinguishedName
+                objGroupList.Add arrstrGroupSIDs(j), strGroupName
+                objSheet.Cells(intRow, intCol).Value = strGroupName
+            Else
+                ' Retrieve group name from dictionary object.
+                strGroupName = objGroupList(arrstrGroupSIDs(j))
+                objSheet.Cells(intRow, intCol).Value = strGroupName
+            End If
+            intCol = intCol + 1
+        Next        
+    End If
+    ' Move to the next record in the recordset.
+    intRow = intRow + 1
+    adoRecordset.MoveNext
+Loop
+
+' Save spreadsheet and close the workbook.
+objExcel.ActiveWorkbook.SaveAs strExcelPath
+objExcel.ActiveWorkbook.Close
+
+' Quit Excel and clean up.
+objExcel.Application.Quit
+adoRecordset.Close
+adoConnection.Close
+
+Function OctetToHexStr(ByVal arrbytOctet)
+    ' Function to convert OctetString (byte array) to Hex string.
+    Dim k
+    OctetToHexStr = ""
+    For k = 1 To Lenb(arrbytOctet)
+        OctetToHexStr = OctetToHexStr _
+            & Right("0" & Hex(Ascb(Midb(arrbytOctet, k, 1))), 2)
+    Next
+End Function

@@ -1,0 +1,300 @@
+' ResetLocalAdminPwds.vbs
+' VBScript program to reset the local Administrator password on every
+' workstation in the domain.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2008 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - June 10, 2008
+' Version 1.1 - September 14, 2010 - Modify Ping function for IPv6.
+'
+' Maintains a log documenting all activity. In addition, the NetBIOS
+' names of computers that have not had the password reset is documented
+' in a "missed" file. The next time the program is run, only the
+' computers in this file are processed. The program can be run
+' repeatedly until this file is empty.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim adoCommand, adoConnection, strBase, strFilter, strAttributes
+Dim objRootDSE, strDNSDomain, strQuery, adoRecordset, strComputer
+Dim objShell, strLogFile, objFSO, objLog, blnMissed, lngReset
+Dim objLocalAdmin, strPassword, strLine, strTitle, lngMissed
+Dim strMissedFile, objMissed, arrstrMissed(), k, strMessage
+
+Const ForWriting = 2
+Const ForAppending = 8
+Const ForReading = 1
+Const OpenAsASCII = 0
+Const CreateIfNotExist = True
+
+strTitle = "ResetLocalAdminPwds"
+
+' Specify the new local Administrator password for all workstations.
+strPassword = "zxy#213$q"
+
+' Specify log file.
+strLogFile = "c:\scripts\ResetPwds.log"
+' Specify missed file (NetBIOS names of missed computers).
+strMissedFile = "c:\scripts\Missed.txt"
+
+' Open the log file for appending.
+Set objFSO = CreateObject("Scripting.FileSystemObject")
+On Error Resume Next
+Set objLog = objFSO.OpenTextFile(strLogFile, _
+    ForAppending, CreateIfNotExist, OpenAsASCII)
+If (Err.Number <> 0) Then
+    On Error GoTo 0
+    Wscript.Echo "File " & strLogFile & " cannot be opened"
+    Wscript.Quit
+End If
+On Error GoTo 0
+
+' Open missed file.
+If (objFSO.FileExists(strMissedFile) = True) Then
+    ' Missed text file exists. Open the file for reading.
+    blnMissed = True
+    Set objMissed = objFSO.OpenTextFile(strMissedFile, _
+        ForReading)
+    ' Read computer NetBIOS names into an array.
+    k = 0
+    Do Until objMissed.AtEndOfStream
+        strLine = Trim(objMissed.ReadLine)
+        If (strLine <> "") Then
+            ReDim Preserve arrstrMissed(k)
+            arrstrMissed(k) = strLine
+            k = k + 1
+        End if
+    Loop
+    ' Close the file.
+    objMissed.Close
+    ' Check if any names in file.
+    If (k = 0) Then
+        ' No NetBIOS names in missed text file. No computers need
+        ' to have the local Administrator password reset.
+        Call MsgBox("No computers need to have the local Administrator" _
+            & vbCrLf & "password reset. To reset the password on all" _
+            & vbCrLf & "workstations in the domain, delete the file of" _
+            & vbCrLf & "missed computers: " & strMissedFile & "." _
+            & vbCrLf & "You may also want to delete the log file: " _
+                & strLogFile & "." _
+            & vbCrLf & "Then make sure the new password is hard coded" _
+            & vbCrLf & "correctly and rerun the program.", _
+            vbOKOnly + vbInformation, strTitle)
+        objLog.Close
+        Wscript.Quit
+    End If
+    ' Reopen the file for writing.
+    Set objMissed = objFSO.OpenTextFile(strMissedFile, _
+        ForWriting, CreateIfNotExist, OpenAsASCII)
+Else
+    ' Missed text file does not exist. Open the file for writing.
+    blnMissed = False
+    Set objMissed = objFSO.OpenTextFile(strMissedFile, _
+        ForWriting, CreateIfNotExist, OpenAsASCII)
+End If
+
+' Write to log file.
+objLog.WriteLine "Program ResetLocalAdminPwds.vbs"
+objLog.WriteLine "Started: " & CStr(Now())
+If (blnMissed = True) Then
+    objLog.WriteLine "Reading computer names from file of missed computers"
+Else
+    objLog.WriteLine "Retrieving all workstation names from AD"
+End If
+
+' WshShell object required by Function PingMachine.
+Set objShell = CreateObject("Wscript.Shell")
+
+lngReset = 0
+lngMissed = 0
+If (blnMissed = True) Then
+    ' Read array of missed computer names.
+    For k = 0 To UBound(arrstrMissed)
+        strComputer = arrstrMissed(k)
+        Wscript.Echo strComputer
+        ' Ping the computer.
+        If (PingMachine(strComputer, 1, 750) = True) Then
+            ' Bind to local Administrator user on the computer.
+            ' Trap error if unable to bind or set password.
+            On Error Resume Next
+            Set objLocalAdmin = GetObject("WinNT://" & strComputer _
+                & "/Administrator,user")
+            If (Err.Number = 0) Then
+                objLocalAdmin.SetPassword strPassword
+                If (Err.Number = 0) Then
+                    ' Restore normal error handling.
+                    On Error GoTo 0
+                    objLog.WriteLine strComputer & " password reset"
+                    lngReset = lngReset + 1
+                Else
+                    ' Restore normal error handling.
+                    On Error GoTo 0
+                    objLog.WriteLine strComputer _
+                        & " ## unable to set password"
+                    objMissed.WriteLine strComputer
+                    lngMissed = lngMissed + 1
+                End If
+            Else
+                ' Restore normal error handling.
+                On Error GoTo 0
+                objLog.WriteLine strComputer _
+                    & " ## unable to bind to local Administrator"
+                objMissed.WriteLine strComputer
+                lngMissed = lngMissed + 1
+            End If
+        Else
+            ' Computer not available.
+            objLog.WriteLine strComputer & " ## not available"
+            objMissed.WriteLine strComputer
+            lngMissed = lngMissed + 1
+        End If
+    Next
+Else
+    ' Setup ADO objects.
+    Set adoCommand = CreateObject("ADODB.Command")
+    Set adoConnection = CreateObject("ADODB.Connection")
+    adoConnection.Provider = "ADsDSOObject"
+    adoConnection.Open "Active Directory Provider"
+    adoCommand.ActiveConnection = adoConnection
+
+    ' Search entire Active Directory domain.
+    Set objRootDSE = GetObject("LDAP://RootDSE")
+    strDNSDomain = objRootDSE.Get("defaultNamingContext")
+    strBase = "<LDAP://" & strDNSDomain & ">"
+
+    ' Filter on computers without a server operating system
+    strFilter = "(&(objectCategory=computer)(!operatingSystem=*server*))"
+
+    ' Comma delimited list of attribute values to retrieve.
+    strAttributes = "sAMAccountName"
+
+    ' Construct the LDAP syntax query.
+    strQuery = strBase & ";" & strFilter & ";" & strAttributes & ";subtree"
+    adoCommand.CommandText = strQuery
+    adoCommand.Properties("Page Size") = 100
+    adoCommand.Properties("Timeout") = 30
+    adoCommand.Properties("Cache Results") = False
+
+    ' Run the query.
+    Set adoRecordset = adoCommand.Execute
+
+    ' Enumerate the resulting recordset.
+    Do Until adoRecordset.EOF
+        ' Retrieve NetBIOS name of computer.
+        strComputer = adoRecordset.Fields("sAMAccountName").Value
+        ' Remove trailing "$".
+        strComputer = Left(strComputer, Len(strComputer) - 1)
+        Wscript.Echo strComputer
+        ' Ping the computer.
+        If (PingMachine(strComputer, 1, 750) = True) Then
+            ' Bind to local Administrator user on the computer.
+            ' Trap error if unable to bind or set password.
+            On Error Resume Next
+            Set objLocalAdmin = GetObject("WinNT://" & strComputer _
+                & "/Administrator,user")
+            If (Err.Number = 0) Then
+                objLocalAdmin.SetPassword strPassword
+                If (Err.Number = 0) Then
+                    ' Restore normal error handling.
+                    On Error GoTo 0
+                    objLog.WriteLine strComputer & " password reset"
+                    lngReset = lngReset + 1
+                Else
+                    ' Restore normal error handling.
+                    On Error GoTo 0
+                    objLog.WriteLine strComputer _
+                        & " ## unable to set password"
+                    objMissed.WriteLine strComputer
+                    lngMissed = lngMissed + 1
+                End If
+            Else
+                ' Restore normal error handling.
+                On Error GoTo 0
+                objLog.WriteLine strComputer _
+                    & " ## unable to bind to local Administrator"
+                objMissed.WriteLine strComputer
+                lngMissed = lngMissed + 1
+            End If
+        Else
+            ' Computer not available.
+            objLog.WriteLine strComputer & " ## not available"
+            objMissed.WriteLine strComputer
+            lngMissed = lngMissed + 1
+        End If
+        ' Move to the next record in the recordset.
+        adoRecordset.MoveNext
+    Loop
+    adoRecordset.Close
+    adoConnection.Close
+End If
+
+' Write to log file.
+objLog.WriteLine "Finished: " & CStr(Now())
+
+' Clean up.
+objLog.Close
+objMissed.Close
+
+If (lngReset > 0) Then
+    strMessage = "Passwords reset on " & FormatNumber(lngReset, 0) _
+        & " computers."
+Else
+    strMessage = "Passwords reset on No computers."
+End If
+If (lngMissed > 0) Then
+    strMessage = strMessage & vbCrLf _
+        & "Passwords Not reset on " & FormatNumber(lngMissed, 0) _
+        & " computers." _
+        & vbCrLf & "Computers missed are documented in file:" _
+        & vbCrLf & strMissedFile
+End If
+strMessage = strMessage & vbCrLf & "See log file:" _
+    & vbCrLf & strLogFile
+Call MsgBox(strMessage, vbOKOnly + vbInformation, strTitle)
+
+Function PingMachine(ByVal strHost, ByVal intPings, ByVal intTO)
+    ' Returns True if strHost can be pinged.
+    ' strHost is the NetBIOS name or IP address of host computer.
+    ' intPings is number of echo requests to send.
+    ' intTO is timeout in milliseconds to wait for each reply.
+    ' Variable objShell has global scope and must be declared and set
+    ' in the main program. Requires WSH 5.6, which comes standard with
+    ' Windows XP and above.
+    ' Modified 09/14/2010 to search for "Reply from" instead of "TTL=".
+
+    Dim strResults
+    Dim objExecObject
+
+    ' Defaults.
+    If (intPings = "") Then
+        intPings = 2
+    End If
+    If (intTO = "") Then
+        intTO = 750
+    End If
+
+    ' Ping the machine.
+    Set objExecObject = objShell.Exec("%comspec% /c ping -n " _
+        & CStr(intPings) & " -w " & CStr(intTO) & " " & strHost)
+
+    ' Read the output.
+    Do Until objExecObject.StdOut.AtEndOfStream
+        strResults = objExecObject.StdOut.ReadAll
+    Loop
+
+    Select Case InStr(strResults, "Reply from")
+        Case 0
+            ' No response.
+            PingMachine = False
+        Case Else
+            ' Computer responded to ping.
+            PingMachine = True
+    End Select
+
+End Function

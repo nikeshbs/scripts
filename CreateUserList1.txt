@@ -1,0 +1,68 @@
+' CreateUserList1.vbs
+' VBScript program to create a text file listing all users in the
+' domain.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2002-2010 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - November 10, 2002
+' Version 1.1 - February 19, 2003 - Standardize Hungarian notation.
+' Version 1.2 - January 25, 2004 - Modify error trapping.
+' Version 1.3 - November 6, 2010 - No need to set objects to Nothing.
+' This program enumerates all users in the domain and writes each user's
+' NT name (sAMAccountName) to a text file, one name per line. The
+' NetBIOS domain name and the name of the text file are passed to the
+' program as parameters. The text file name can include the path.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim strFilePath, strNetBIOSDomain, objFSO, objFile, objDomain, objUser
+Dim strName
+
+' Check for required arguments.
+If (Wscript.Arguments.Count < 2) Then
+    Wscript.Echo "Arguments <Domain> and <FileName> required. " _
+        & "For example:" & vbCrLf _
+        & "cscript CreateUserList1.vbs MyDomain, c:\MyFolder\UserList1.txt"
+    Wscript.Quit(0)
+End If
+
+strNetBIOSDomain = Wscript.Arguments(0)
+strFilePath = Wscript.Arguments(1)
+
+Set objFSO = CreateObject("Scripting.FileSystemObject")
+
+' Open the file for write access.
+On Error Resume Next
+Set objFile = objFSO.OpenTextFile(strFilePath, 2, True, 0)
+If (Err.Number <> 0) Then
+    On Error GoTo 0
+    Wscript.Echo "File " & strFilePath & " cannot be opened"
+    Wscript.Quit(1)
+End If
+
+' Bind to the domain.
+On Error Resume Next
+Set objDomain = GetObject("WinNT://" & strNetBIOSDomain)
+If (Err.Number <> 0) Then
+    On Error GoTo 0
+    Wscript.Echo "Domain " & strNetBIOSDomain & " not found"
+    Wscript.Quit(1)
+End If
+On Error GoTo 0
+
+' Enumerate all users in the domain.
+' Write each user's NT name to the file, one name per line.
+objDomain.Filter = Array("user")
+For Each objUser In objDomain
+    strName = objUser.name
+    objFile.WriteLine strName
+Next
+
+' Clean up.
+objFile.Close

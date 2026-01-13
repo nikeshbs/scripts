@@ -1,0 +1,745 @@
+' PsToHtml.vbs
+' VBScript program to read PowerShell code from a text file and convert
+' into HTML, with colorization. For use in a Microsoft Forum message.
+' A new file is created with the same name as the input file, but with
+' *.htm extension. The contents of the new file can be pasted into a
+' forum message using the "Edit HTML Source" feature. This ensures that
+' the code snippet maintains spacing and uses a fixed-width font.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2011-2012 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - October 15, 2011
+' Version 1.1 - February 7, 2012 - Add border around the code.
+' Version 1.2 - February 8, 2012 - Preserve all embedded spacing.
+' Version 1.3 - February 11, 2012 - Recognize more cmdlets. Improve parsing.
+' Version 1.4 - February 18, 2012 - Remove border, add horizontal line.
+' Version 1.5 - February 23, 2012 - Replace horizontal line with gray border.
+' Version 1.6 - April 27, 2012 - Add switch to omit gray border.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim strInputFile, objFSO, objInput, strLine
+Dim strFilePath, strNewFile, objOutput, objList, k
+Dim strWord, strChar, strNewLine
+Dim blnQuote2, strQuote, strComment, blnQuote1
+Dim objRE, blnHere, strHere, blnBorder
+
+Const ForReading = 1
+Const ForWriting = 2
+Const OpenAsASCII = 0
+Const CreateIfNotExist = True
+
+' One parameter required.
+If (Wscript.Arguments.Count <> 1) And (Wscript.Arguments.Count <> 2) Then
+    Wscript.Echo "File name required"
+    Wscript.Echo "Syntax:"
+    Wscript.Echo "cscript //nologo PsToHtml.vbs Example.ps1"
+    Wscript.Echo "This program will create file Example.htm"
+    Wscript.Echo "You can also specify the optional parameter ""/nb"" to omit the gray border"
+    Wscript.Quit
+End If
+
+Set objList = CreateObject("Scripting.Dictionary")
+objList.CompareMode = vbTextCompare
+
+' Open the specified file of code for reading.
+strInputFile = Wscript.Arguments(0)
+Set objFSO = CreateObject("Scripting.FileSystemObject")
+Set objInput = objFSO.OpenTextFile(strInputFile, ForReading)
+
+blnBorder = True
+If (Wscript.Arguments.Count = 2) Then
+    If (LCase(Wscript.Arguments(1)) = "/nb") Then
+        blnBorder = False
+    Else
+        Wscript.Echo "If included, the second paramter must be ""/nb"", to omit the gray border"
+        Wscript.Echo "Syntax:"
+        Wscript.Echo "cscript //nologo PsToHtml.vbs Example.ps1 /nb"
+        Wscript.Echo "This program will create file Example.htm"
+        Wscript.Quit
+    End If
+End If
+
+' Determine new file name.
+strFilePath = objFSO.GetAbsolutePathName(strInputFile)
+strNewFile = objFSO.GetBaseName(strFilePath) & ".htm"
+
+' Regular expression to recognize variables, operators, and square brackets.
+Set objRE = New RegExp
+objRE.Global = True
+
+' Open new *.htm file for HTML.
+Set objOutput = objFSO.OpenTextFile(strNewFile, _
+    ForWriting, CreateIfNotExist, OpenAsASCII)
+
+' Output opening paragraph tag, using fixed width font.
+If (blnBorder = True) Then
+    objOutput.WriteLine "<p style=""font-family:Courier New,Courier;border:1px solid gray"">"
+Else
+    ' Output horizontal line.
+    objOutput.WriteLine "<hr />"
+    objOutput.WriteLine "<p style=""font-family:Courier New,Courier"">"
+End If
+
+' PowerShell keywords and cmdlets, to be colored blue.
+objList.Add "Do", True
+objList.Add "If", True
+objList.Add "While", True
+objList.Add "Function", True
+objList.Add "Try", True
+objList.Add "Catch", True
+objList.Add "Finally", True
+objList.Add "In", True
+objList.Add "Else", True
+objList.Add "For", True
+objList.Add "ForEach", True
+objList.Add "ForEach-Object", True
+objList.Add "Where-Object", True
+objList.Add "Where", True
+objList.Add "Switch", True
+objList.Add "Break", True
+objList.Add "Continue", True
+objList.Add "Param", True
+objList.Add "Throw", True
+objList.Add "Return", True
+
+objList.Add "Out-Null", True
+objList.Add "Out-Default", True
+objList.Add "Out-Host", True
+objList.Add "Out-File", True
+objList.Add "Out-Printer", True
+objList.Add "Out-String", True
+objList.Add "Out-GridView", True
+
+objList.Add "Invoke-WSManAction", True
+objList.Add "Invoke-History", True
+objList.Add "Invoke-Command", True
+objList.Add "Invoke-Expression", True
+objList.Add "Invoke-WmiMethod", True
+objList.Add "Invoke-Item", True
+
+objList.Add "Get-WinEvent", True
+objList.Add "Get-Counter", True
+objList.Add "Get-WSManCredSSP", True
+objList.Add "Get-WSManInstance", True
+objList.Add "Get-Command", True
+objList.Add "Get-Help", True
+objList.Add "Get-History", True
+objList.Add "Get-PSSessionConfiguration", True
+objList.Add "Get-PSSession", True
+objList.Add "Get-Job", True
+objList.Add "Get-Module", True
+objList.Add "Get-PSSnapin", True
+objList.Add "Get-FormatData", True
+objList.Add "Get-Event", True
+objList.Add "Get-EventSubscriber", True
+objList.Add "Get-Alias", True
+objList.Add "Get-Culture", True
+objList.Add "Get-Date", True
+objList.Add "Get-Host", True
+objList.Add "Get-Member", True
+objList.Add "Get-Random", True
+objList.Add "Get-UICulture", True
+objList.Add "Get-Unique", True
+objList.Add "Get-Variable", True
+objList.Add "Get-PSBreakpoint", True
+objList.Add "Get-PSCallStack", True
+objList.Add "Get-TraceSource", True
+objList.Add "Get-EventLog", True
+objList.Add "Get-ChildItem", True
+objList.Add "Get-Content", True
+objList.Add "Get-ItemProperty", True
+objList.Add "Get-WmiObject", True
+objList.Add "Get-Location", True
+objList.Add "Get-PSDrive", True
+objList.Add "Get-Item", True
+objList.Add "Get-PSProvider", True
+objList.Add "Get-Process", True
+objList.Add "Get-Service", True
+objList.Add "Get-Transaction", True
+objList.Add "Get-HotFix", True
+objList.Add "Get-ComputerRestorePoint", True
+objList.Add "Get-Acl", True
+objList.Add "Get-PfxCertificate", True
+objList.Add "Get-Credential", True
+objList.Add "Get-ExecutionPolicy", True
+objList.Add "Get-AuthenticodeSignature", True
+objList.Add "Get-ADAccountAuthorizationGroup", True
+objList.Add "Get-ADAccountResultantPasswordReplicationPolicy", True
+objList.Add "Get-ADComputer", True
+objList.Add "Get-ADComputerServiceAccount", True
+objList.Add "Get-ADDefaultDomainPasswordPolicy", True
+objList.Add "Get-ADDomain", True
+objList.Add "Get-ADDomainController", True
+objList.Add "Get-ADDomainControllerPasswordReplicationPolicy", True
+objList.Add "Get-ADDomainControllerPasswordReplicationPolicyUsage", True
+objList.Add "Get-ADFineGrainedPasswordPolicy", True
+objList.Add "Get-ADFineGrainedPasswordPolicySubject", True
+objList.Add "Get-ADForest", True
+objList.Add "Get-ADGroup", True
+objList.Add "Get-ADGroupMember", True
+objList.Add "Get-ADObject", True
+objList.Add "Get-ADOptionalFeature", True
+objList.Add "Get-ADOrganizationalUnit", True
+objList.Add "Get-ADPrincipalGroupMembership", True
+objList.Add "Get-ADRootDSE", True
+objList.Add "Get-ADServiceAccount", True
+objList.Add "Get-ADUser", True
+objList.Add "Get-ADUserResultantPasswordPolicy", True
+
+objList.Add "set", True
+objList.Add "Set-WSManQuickConfig", True
+objList.Add "Set-WSManInstance", True
+objList.Add "Set-PSSessionConfiguration", True
+objList.Add "Set-PSDebug", True
+objList.Add "Set-StrictMode", True
+objList.Add "Set-Alias", True
+objList.Add "Set-Date", True
+objList.Add "Set-Variable", True
+objList.Add "Set-PSBreakpoint", True
+objList.Add "Set-TraceSource", True
+objList.Add "Set-Location", True
+objList.Add "Set-Item", True
+objList.Add "Set-Service", True
+objList.Add "Set-Content", True
+objList.Add "Set-ItemProperty", True
+objList.Add "Set-WmiInstance", True
+objList.Add "Set-Acl", True
+objList.Add "Set-ExecutionPolicy", True
+objList.Add "Set-AuthenticodeSignature", True
+objList.Add "Set-ADAccountControl", True
+objList.Add "Set-ADAccountExpiration", True
+objList.Add "Set-ADAccountPassword", True
+objList.Add "Set-ADComputer", True
+objList.Add "Set-ADDefaultDomainPasswordPolicy", True
+objList.Add "Set-ADDomain", True
+objList.Add "Set-ADDomainMode", True
+objList.Add "Set-ADFineGrainedPasswordPolicy", True
+objList.Add "Set-ADForest", True
+objList.Add "Set-ADForestMode", True
+objList.Add "Set-ADGroup", True
+objList.Add "Set-ADObject", True
+objList.Add "Set-ADOrganizationalUnit", True
+objList.Add "Set-ADServiceAccount", True
+objList.Add "Set-ADUser", True
+
+objList.Add "ConvertTo-Html", True
+objList.Add "ConvertFrom-StringData", True
+objList.Add "ConvertTo-CSV", True
+objList.Add "ConvertFrom-CSV", True
+objList.Add "ConvertTo-XML", True
+objList.Add "Convert-Path", True
+objList.Add "ConvertFrom-SecureString", True
+objList.Add "ConvertTo-SecureString", True
+
+objList.Add "select", True
+objList.Add "Select-String", True
+objList.Add "Select-Object", True
+objList.Add "Select-XML", True
+
+objList.Add "Read-Host", True
+
+objList.Add "clear", True
+objList.Add "Clear-History", True
+objList.Add "Clear-Variable", True
+objList.Add "Clear-Content", True
+objList.Add "Clear-ItemProperty", True
+objList.Add "Clear-EventLog", True
+objList.Add "Clear-Item", True
+objList.Add "Clear-ADAccountExpiration", True
+
+objList.Add "write", True
+objList.Add "Write-Host", True
+objList.Add "Write-Progress", True
+objList.Add "Write-Debug", True
+objList.Add "Write-Verbose", True
+objList.Add "Write-Warning", True
+objList.Add "Write-Error", True
+objList.Add "Write-Output", True
+objList.Add "Write-EventLog", True
+
+objList.Add "move", True
+objList.Add "Move-ItemProperty", True
+objList.Add "Move-Item", True
+objList.Add "Move-ADDirectoryServer", True
+objList.Add "Move-ADDirectoryServerOperationMasterRole", True
+objList.Add "Move-ADObject", True
+
+objList.Add "New-WSManInstance", True
+objList.Add "New-WSManSessionOption", True
+objList.Add "New-PSSession", True
+objList.Add "New-PSSessionOption", True
+objList.Add "New-Module", True
+objList.Add "New-ModuleManifest", True
+objList.Add "New-Event", True
+objList.Add "New-Alias", True
+objList.Add "New-TimeSpan", True
+objList.Add "New-Object", True
+objList.Add "New-Variable", True
+objList.Add "New-EventLog", True
+objList.Add "New-PSDrive", True
+objList.Add "New-Item", True
+objList.Add "New-ItemProperty", True
+objList.Add "New-Service", True
+objList.Add "New-WebServiceProxy", True
+objList.Add "New-ADComputer", True
+objList.Add "New-ADFineGrainedPasswordPolicy", True
+objList.Add "New-ADGroup", True
+objList.Add "New-ADObject", True
+objList.Add "New-ADOrganizationalUnit", True
+objList.Add "New-ADServiceAccount", True
+objList.Add "New-ADUser", True
+
+objList.Add "Format-List", True
+objList.Add "Format-Custom", True
+objList.Add "Format-Table", True
+objList.Add "Format-Wide", True
+
+objList.Add "Import-Counter", True
+objList.Add "Import-Module", True
+objList.Add "Import-CSV", True
+objList.Add "Import-PSSession", True
+objList.Add "Import-Alias", True
+objList.Add "Import-LocalizedData", True
+objList.Add "Import-Clixml", True
+
+objList.Add "Export-Counter", True
+objList.Add "Export-ModuleMember", True
+objList.Add "Export-Console", True
+objList.Add "Export-FormatData", True
+objList.Add "Export-CSV", True
+objList.Add "Export-Alias", True
+objList.Add "Export-PSSession", True
+objList.Add "Export-Clixml", True
+
+objList.Add "compare", True
+objList.Add "Compare-Object", True
+
+objList.Add "Remove-WSManInstance", True
+objList.Add "Remove-PSSession", True
+objList.Add "Remove-Job", True
+objList.Add "Remove-Module", True
+objList.Add "Remove-PSSnapin", True
+objList.Add "Remove-Event", True
+objList.Add "Remove-Variable", True
+objList.Add "Remove-PSBreakpoint", True
+objList.Add "Remove-EventLog", True
+objList.Add "Remove-PSDrive", True
+objList.Add "Remove-Item", True
+objList.Add "Remove-ItemProperty", True
+objList.Add "Remove-WmiObject", True
+objList.Add "Remove-Computer", True
+objList.Add "Remove-ADComputer", True
+objList.Add "Remove-ADComputerServiceAccount", True
+objList.Add "Remove-ADDomainControllerPasswordReplicationPolicy", True
+objList.Add "Remove-ADFineGrainedPasswordPolicy", True
+objList.Add "Remove-ADFineGrainedPasswordPolicySubject", True
+objList.Add "Remove-ADGroup", True
+objList.Add "Remove-ADGroupMember", True
+objList.Add "Remove-ADObject", True
+objList.Add "Remove-ADOrganizationalUnit", True
+objList.Add "Remove-ADPrincipalGroupMembership", True
+objList.Add "Remove-ADServiceAccount", True
+objList.Add "Remove-ADUser", True
+
+objList.Add "copy", True
+objList.Add "Copy-ItemProperty", True
+objList.Add "Copy-Item", True
+
+objList.Add "Add-History", True
+objList.Add "Add-PSSnapin", True
+objList.Add "Add-Member", True
+objList.Add "Add-Type", True
+objList.Add "Add-Content", True
+objList.Add "Add-Computer", True
+objList.Add "Add-ADComputerServiceAccount", True
+objList.Add "Add-ADDomainControllerPasswordReplicationPolicy", True
+objList.Add "Add-ADFineGrainedPasswordPolicySubject", True
+objList.Add "Add-ADGroupMember", True
+objList.Add "Add-ADPrincipalGroupMembership", True
+
+objList.Add "start", True
+objList.Add "Start-Job", True
+objList.Add "Start-Sleep", True
+objList.Add "Start-Transcript", True
+objList.Add "Start-Process", True
+objList.Add "Start-Service", True
+objList.Add "Start-Transaction", True
+
+objList.Add "Stop-Job", True
+objList.Add "Stop-Transcript", True
+objList.Add "Stop-Process", True
+objList.Add "Stop-Service", True
+objList.Add "Stop-Computer", True
+
+objList.Add "Test-WSMan", True
+objList.Add "Test-ModuleManifest", True
+objList.Add "Test-Path", True
+objList.Add "Test-Connection", True
+objList.Add "Test-ComputerSecureChannel", True
+
+objList.Add "Search-ADAccount", True
+objList.Add "sort", True
+objList.Add "Sort-Object", True
+objList.Add "Rename-Item", True
+objList.Add "Rename-ItemProperty", True
+objList.Add "Rename-ADObject", True
+objList.Add "Restart-Service", True
+objList.Add "Restart-Computer", True
+objList.Add "Register-PSSessionConfiguration", True
+objList.Add "Register-ObjectEvent", True
+objList.Add "Register-EngineEvent", True
+objList.Add "Register-WmiEvent", True
+objList.Add "Disconnect-WSMan", True
+objList.Add "Connect-WSMan", True
+objList.Add "Limit-EventLog", True
+objList.Add "Enter-PSSession", True
+objList.Add "Receive-Job", True
+objList.Add "Show-EventLog", True
+objList.Add "measure", True
+objList.Add "Measure-Object", True
+objList.Add "Measure-Command", True
+objList.Add "Send-MailMessage", True
+objList.Add "Tee-Object", True
+objList.Add "Install-ADServiceAccount", True
+
+' Read the code from the file.
+blnHere = False
+strHere = ""
+Do Until objInput.AtEndOfStream
+    strLine = objInput.ReadLine
+
+    ' Replace symbols.
+    strLine = Replace(strLine, "&", "&amp;")
+    strLine = Replace(strLine, "<", "&lt;")
+    strLine = Replace(strLine, ">", "&gt;")
+
+    ' Check for comments, quoted strings, here-strings, and keywords.
+    strNewLine = ""
+    strWord = ""
+    blnQuote1 = False
+    blnQuote2 = False
+    strQuote = ""
+    For k = 1 To Len(strLine)
+        strChar = Mid(strLine, k, 1)
+        Select Case strChar
+            Case "#"
+                ' Pound sign character.
+                If (blnQuote2 = False) And (blnQuote1 = False) And (blnHere = False) Then
+                    ' A pound sign not in a quoted string or here-string
+                    ' indicates a comment.
+                    ' Comments always continue to the end of the line.
+                    strComment = Mid(strLine, k)
+                    ' Replace symbols.
+                    strComment = Replace(strComment, """", "&quot;")
+                    strComment = Replace(strComment, "'", "&#39;")
+                    ' Words in comments are not colorized.
+                    If (strWord <> "") Then
+                        strNewLine = strNewLine & strWord
+                    End If
+                    ' Comments are colored green.
+                    strNewLine = strNewLine & "<span style=""color: green;"">" _
+                        & Trim(strComment) & "</span>"
+                    ' Ignore everything that follows on this line.
+                    strWord = ""
+                    Exit For
+                End If
+                If (blnHere = True) Then
+                    ' Pound sign character in here-string.
+                    strHere = strHere & strChar
+                Else
+                    ' Pound sign character in quoted string.
+                    strQuote = strQuote & strChar
+                End If
+            Case "'"
+                ' Single quote character.
+                If (blnHere = True) Then
+                    ' Part of a here-string.
+                    strHere = strHere & strChar
+                ElseIf (blnQuote2 = False) And (blnQuote1 = False) Then
+                    ' Start of a quoted string.
+                    blnQuote1 = True
+                    strQuote = strQuote & "&#39;"
+                    If (strWord <> "") Then
+                        strWord = ParseTokens(strWord)
+                        strNewLine = strNewLine & strWord
+                        strWord = ""
+                    End If
+                ElseIf (blnQuote2 = True) Then
+                    ' Single quote is part of a double quoted string.
+                    ' Treat like any other character.
+                    strQuote = strQuote & "&#39;"
+                ElseIf (blnQuote1 = True) Then
+                    ' Single quote in a single quoted string.
+                    If (k < Len(strLine)) Then
+                        ' Check if the next character is a single quote.
+                        If (Mid(strLine, k + 1, 1) = "'") Then
+                            ' Two single quote characters in a row.
+                            strQuote = strQuote & "&#39;"
+                            ' Next character, a quote, will be treated as the start
+                            ' of a quoted string, except strQuote will not be blank.
+                            blnQuote1 = False
+                        Else
+                            ' This terminates a string. Strings are colored red.
+                            strQuote = strQuote & "&#39;"
+                            strNewLine = strNewLine & "<span style=""color: #a31515;"">" _
+                                & strQuote & "</span>"
+                            strQuote = ""
+                            blnQuote1 = False
+                            strWord = ""
+                        End If
+                    Else
+                        ' This terminates a string. Strings are colored red.
+                        strQuote = strQuote & "&#39;"
+                        strNewLine = strNewLine & "<span style=""color: #a31515;"">" _
+                            & strQuote & "</span>"
+                        strQuote = ""
+                        blnQuote1 = False
+                        strWord = ""
+                    End If
+                Else
+                    ' Cannot have both blnQuote1 and blnQuote2 be True.
+                End If
+            Case """"
+                ' Double quote character.
+                If (blnHere = True) Then
+                    ' Part of a here-string.
+                    strHere = strHere & strChar
+                ElseIf (blnQuote2 = False) And (blnQuote1 = False) Then
+                    ' Start of a quoted string.
+                    blnQuote2 = True
+                    strQuote = strQuote & "&quot;"
+                    If (strWord <> "") Then
+                        strWord = ParseTokens(strWord)
+                        strNewLine = strNewLine & strWord
+                        strWord = ""
+                    End If
+                ElseIf (blnQuote1 = True) Then
+                    ' Double quote is part of a singe quoted string.
+                    ' Treat like any other character.
+                    strQuote = strQuote & """"
+                ElseIf (blnQuote2 = True) Then
+                    ' Double quote in  a double quoted string.
+                    If (k < Len(strLine)) Then
+                        ' Check if the next character is a double quote.
+                        If (Mid(strLine, k + 1, 1) = """") Then
+                            ' Two double quote characters in a row.
+                            strQuote = strQuote & "&quot;"
+                            ' Next character, a quote, will be treated as the start
+                            ' of a quoted string, except strQuote will not be blank.
+                            blnQuote2 = False
+                        Else
+                            ' This terminates a string. Strings are colored red.
+                            strQuote = strQuote & "&quot;"
+                            strNewLine = strNewLine & "<span style=""color: #a31515;"">" _
+                                & strQuote & "</span>"
+                            strQuote = ""
+                            blnQuote2 = False
+                            strWord = ""
+                        End If
+                    Else
+                        ' This terminates a string. Strings are colored red.
+                        strQuote = strQuote & "&quot;"
+                        strNewLine = strNewLine & "<span style=""color: #a31515;"">" _
+                            & strQuote & "</span>"
+                        strQuote = ""
+                        blnQuote2 = False
+                        strWord = ""
+                    End If
+                Else
+                    ' Cannot have both blnQuote1 and blnQuote2 be True.
+                End If
+            Case " ", vbTab
+                ' Space or tab character.
+                If (blnHere = True) Then
+                    ' Part of a here-string.
+                    strHere = strHere & strChar
+                ElseIf (blnQuote2 = True) Or (blnQuote1 = True) Then
+                    ' Space is part of the quoted string.
+                    strQuote = strQuote & strChar
+                Else
+                    ' Space delimits a word. Check for keyword.
+                    If (objList.Exists(strWord) = True) Then
+                        ' Keywords are colored blue.
+                        strWord = "<span style=""color: blue"">" & strWord & "</span>"
+                    End If
+                    strWord = ParseTokens(strWord)
+                    strNewLine = strNewLine & strWord & strChar
+                    strWord = ""
+                End If
+            Case "(", "{", "|"
+                ' Open parentheses, open brace, or pipe symbol.
+                If (blnHere = True) Then
+                    ' Part of a here-string.
+                    strHere = strHere & strChar
+                ElseIf (blnQuote2 = True) Or (blnQuote1 = True) Then
+                    ' Part of the quoted string.
+                    strQuote = strQuote & strChar
+                Else
+                    ' A keyword could start at the next character.
+                    strWord = ParseTokens(strWord)
+                    strNewLine = strNewLine & strWord & strChar
+                    strWord = ""
+                End If
+            Case Else
+                ' Any character other than single quote, double quote,
+                ' pound sign, or space.
+                If (blnQuote2 = True) Or (blnQuote1 = True) Then
+                    strQuote = strQuote & strChar
+                ElseIf (blnHere = True) Then
+                    strHere = strHere & strChar
+                    If (strChar = "@") Then
+                        If (k > 1) Then
+                            ' Check if the previous character was a double quote.
+                            If (Mid(strLine, k - 1, 1) = """") Then
+                                ' End of a here-string.
+                                blnHere = False
+                                ' Here-strings are colored red.
+                                strNewLine = strHere & "</span>"
+                                strHere = ""
+                            End If
+                        End If
+                    End If
+                ElseIf (strChar = "@") Then
+                    If (k < Len(strLine)) Then
+                        ' Check if the next character is a double quote.
+                        If (Mid(strLine, k + 1, 1) = """") Then
+                            ' Start of a here-string.
+                            blnHere = True
+                            ' Here-strings are colored red.
+                            strHere = strNewLine & "<span style=""color: #a31515;"">" & strChar
+                        End If
+                    End If
+                    If (blnHere = False) Then
+                        strWord = strWord & strChar
+                    End If
+                Else
+                    strWord = strWord & strChar
+                End If
+        End Select
+    Next
+    If (strWord <> "") Then
+        If (objList.Exists(strWord) = True) Then
+            ' Keywords are colored blue.
+            strWord = "<span style=""color: blue"">" & strWord & "</span>"
+        End If
+        strWord = ParseTokens(strWord)
+        strNewLine = strNewLine & strWord
+    End If
+
+    ' Replace any tab characters with four space characters.
+    strNewLine = Replace(strNewLine, vbTab, "&nbsp;&nbsp;&nbsp;&nbsp;")
+    ' Preserve all spacing.
+    strNewLine = Replace(strNewLine, "  ", "&nbsp;&nbsp;")
+    ' Preserve leading single space.
+    If (Left(strNewLine, 1) = " ") Then
+        strNewLine = "&nbsp;" & Mid(strNewLine, 2)
+    End If
+
+    If (blnHere = False) Then
+        ' Output the line with a trailing carriage return.
+        objOutput.WriteLine strNewLine & "<br />"
+    Else
+        ' Here-string continues on the next line.
+        strHere = strHere & "<br />"
+    End If
+Loop
+
+objInput.Close
+
+' Output closing paragraph tag.
+objOutput.WriteLine "</p>"
+
+' Add a <pre> tag to flag this as code.
+objOutput.WriteLine "<pre>-----</pre>"
+objOutput.WriteLine "<p><br /></p>"
+
+' Close output file.
+objOutput.Close
+
+' Alert user about the new file.
+Wscript.Echo "File " & strNewFile & " with HTML created in the current folder"
+
+Function ParseTokens(ByVal strToken)
+    ' Function to parse tokens.
+    ' Variable objRE must have global scope and be Set in the main program.
+    Dim objMatches, intStart, intLen, strLeft, strVar, strRight, j
+
+    ' Equal and plus signs are colored gray.
+    If ((strToken = "=") Or (strToken = "+")) Then
+        strToken = "<span style=""color: gray"">" & strToken & "</span>"
+    End If
+    ' Search for variables.
+    objRE.Pattern = "[$][a-zA-Z_:0-9]+"
+    Set objMatches = objRE.Execute(strToken)
+    For j = objMatches.Count To 1 Step -1
+        intStart = objMatches(j - 1).FirstIndex + 1
+        intLen = objMatches(j - 1).Length
+        If (intStart > 1) Then
+            strLeft = Left(strToken, intStart - 1)
+        Else
+            strLeft = ""
+        End If
+        strVar = Mid(strToken, intStart, intLen)
+        If (Len(strToken) > intStart + intLen - 1) Then
+            strRight = Mid(strToken, intStart + intLen)
+        Else
+            strRight = ""
+        End If
+        ' Variables are colored orange-red.
+        strToken = strLeft & "<span style=""color: orangered"">" _
+            & strVar & "</span>" & strRight
+    Next
+    ' Search for operators.
+    objRE.Pattern = "^[-][a-zA-Z]+"
+    Set objMatches = objRE.Execute(strToken)
+    For j = objMatches.Count To 1 Step -1
+        intStart = objMatches(j - 1).FirstIndex + 1
+        intLen = objMatches(j - 1).Length
+        If (intStart > 1) Then
+            strLeft = Left(strToken, intStart - 1)
+        Else
+            strLeft = ""
+        End If
+        strVar = Mid(strToken, intStart, intLen)
+        If (Len(strToken) > intStart + intLen - 1) Then
+            strRight = Mid(strToken, intStart + intLen)
+        Else
+            strRight = ""
+        End If
+        ' Operators are colored gray.
+        strToken = strLeft & "<span style=""color: gray"">" _
+            & strVar & "</span>" & strRight
+    Next
+    ' Search For text within square brackets.
+    objRE.Pattern = "[\[][a-zA-Z]+[\]]"
+    Set objMatches = objRE.Execute(strToken)
+    For j = objMatches.Count To 1 Step -1
+        intStart = objMatches(j - 1).FirstIndex + 1
+        intLen = objMatches(j - 1).Length
+        If (intStart > 1) Then
+            strLeft = Left(strToken, intStart - 1)
+        Else
+            strLeft = ""
+        End If
+        strVar = Mid(strToken, intStart + 1, intLen - 2)
+        If (Len(strToken) > intStart + intLen - 1) Then
+            strRight = Mid(strToken, intStart + intLen)
+        Else
+            strRight = ""
+        End If
+        ' Text in square brackets is colored teal.
+        ' The brackets are colored gray.
+        strToken = strLeft & "<span style=""color: gray"">" & "[" & "</span>" _
+            & "<span style=""color: teal"">" & strVar & "</span>" _
+            & "<span style=""color: gray"">" & "]" & "</span>" & strRight
+    Next
+    ParseTokens = strToken
+
+End Function

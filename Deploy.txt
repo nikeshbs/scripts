@@ -1,0 +1,362 @@
+' Deploy.vbs
+' VBScript program to deploy a patch or update to all computers
+' that are members of a specified group.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2007 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - January 2, 2007
+' Version 1.1 - July 31, 2007 - Escape any "/" characters in Group DN.
+' Version 1.2 - September 14, 2010 - Modify Ping function for IPv6.
+'
+' Program prompts for a domain group, the executable to deploy, and any
+' command line parameters. Program creates a verbose log called
+' Deploy.log in the current directory.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim strExecutable, strGroup, m_strCommand
+Dim objRootDSE, strDNSDomain, objTrans, strNetBIOSDomain
+Dim strGroupDN, objGroup, objMember, m_objFSO, m_strProgram
+Dim strScriptName, strScriptPath, strScriptFolder
+Dim strComputer, strParms, strLogFile, strLocal
+Dim m_objLogFile, m_objNetwork, m_objShell, m_strTempFile
+Dim m_objLocal, m_strDrive, m_blnFirst, m_objSourceFile
+Dim intSuccess, intFailure
+
+Const ForAppending = 8
+
+' Constants for the NameTranslate object.
+Const ADS_NAME_INITTYPE_GC = 3
+Const ADS_NAME_TYPE_NT4 = 3
+Const ADS_NAME_TYPE_1779 = 1
+
+' Determine DNS name of domain from RootDSE.
+Set objRootDSE = GetObject("LDAP://RootDSE")
+strDNSDomain = objRootDSE.Get("defaultNamingContext")
+
+' Use the NameTranslate object to find the NetBIOS domain name
+' from the DNS domain name.
+Set objTrans = CreateObject("NameTranslate")
+objTrans.Init ADS_NAME_INITTYPE_GC, ""
+objTrans.Set ADS_NAME_TYPE_1779, strDNSDomain
+strNetBIOSDomain = objTrans.Get(ADS_NAME_TYPE_NT4)
+' Remove trailing backslash.
+strNetBIOSDomain = Left(strNetBIOSDomain, Len(strNetBIOSDomain) - 1)
+
+' Prompt for group.
+strGroup =  InputBox("Enter NetBIOS name of group " _
+    & "(of computers) to deploy to", "Deployment Utility")
+
+' Use the Set method to specify the NT format of the object name.
+On Error Resume Next
+objTrans.Set ADS_NAME_TYPE_NT4, strNetBIOSDomain & "\" & strGroup
+If (Err.Number <> 0) Then
+    Wscript.Echo "Group " & strNetBIOSDomain _
+        & "\" & strGroup & " not found"
+    Wscript.Quit
+End If
+On Error GoTo 0
+
+' Use the Get method to retrieve the RFC 1779 Distinguished Name.
+strGroupDN = objTrans.Get(ADS_NAME_TYPE_1779)
+' Escape any forward slash characters, "/", with the backslash
+' escape character. All other characters that should be escaped are.
+strGroupDN = Replace(strGroupDN, "/", "\/")
+
+' Bind to the group object.
+Set objGroup = GetObject("LDAP://" & strGroupDN)
+
+' Prompt for the program to run on each remote computer.
+strExecutable = InputBox("Enter the full path and name of the program " _
+    & "to deploy to computers in the group", "Deployment Utility")
+
+' Check for the existence of the file.
+Set m_objFSO = CreateObject("Scripting.FileSystemObject")
+If (m_objFSO.FileExists(strExecutable) = False) Then
+    Wscript.Echo "File " & strExecutable & " not found"
+    Wscript.Quit
+End If
+' Retrieve program name.
+m_strProgram = m_objFSO.GetFileName(strExecutable)
+
+' Prompt for command line parameters.
+strParms = InputBox("Enter any command line parameters", _
+    "Deployment Utility")
+strParms = Trim(strParms)
+
+' Construct command to execute on remote computers.
+m_strCommand = m_strProgram
+If (strParms <> "") Then
+    m_strCommand = m_strCommand & " " & strParms
+End If
+
+' Retrieve temporary file name for ping operation.
+Set m_objShell = CreateObject("Wscript.Shell")
+m_strTempFile = m_objShell.ExpandEnvironmentStrings("%TEMP%")
+m_strTempFile = m_strTempFile & "\RunResult.tmp"
+
+' Determine current directory.
+strScriptName = Wscript.ScriptName
+strScriptPath = Wscript.ScriptFullName
+strScriptFolder = Left(strScriptPath, _
+    Len(strScriptPath) - Len(strScriptName) - 1)
+
+' Setup log file in current directory.
+strLogFile = strScriptFolder & "\Deploy.log"
+Set m_objLogFile = m_objFSO.OpenTextFile(strLogFile, ForAppending, True)
+m_objLogFile.WriteLine "====="
+m_objLogFile.WriteLine CStr(Now()) & " Deployment started"
+m_objLogFile.WriteLine "-- Deployment executable " & strExecutable
+m_objLogFile.WriteLine "-- Command to execute " & m_strCommand
+m_objLogFile.WriteLine "-- Deploy to computers in group " & strGroup
+
+' Retrieve local computer name.
+Set m_objNetwork = CreateObject("Wscript.Network")
+strLocal = m_objNetwork.ComputerName
+
+' Connect to local computer with WMI.
+Set m_objLocal = GetObject("winmgmts:" _
+    & "{impersonationLevel=impersonate,authenticationLevel=Pkt}!\\" _
+    & strLocal & "\root\cimv2")
+m_objLogFile.WriteLine "-- Connected to local computer " & strLocal
+
+' Default drive letter to map for copying executable file
+' to remote computer.
+m_strDrive = "Z:"
+m_blnFirst = True
+
+' Bind to local executable program file.
+On Error Resume Next
+Set m_objSourceFile = m_objLocal.Get("cim_datafile=""" _
+    & Replace(strExecutable, "\", "\\") & """")
+If (Err.Number <> 0) Then
+    On Error GoTo 0
+    m_objLogFile.WriteLine "-- ### File not found: " & strExecutable
+    Wscript.Echo "File not found: " & strExecutable
+    Wscript.Quit
+End If
+On Error GoTo 0
+
+' Enumerate members of the group.
+intSuccess = 0
+intFailure = 0
+For Each objMember In objGroup.Members
+    ' Only deploy to computer objects.
+    If (LCase(objMember.Class) = "computer") Then
+        ' Retrieve NetBIOS name of computer.
+        strComputer = objMember.sAMAccountName
+        ' Remove trailing "$".
+        strComputer = Left(strComputer, Len(strComputer) - 1)
+        m_objLogFile.WriteLine CStr(Now()) _
+            & " deploy to computer " & strComputer
+        Wscript.Echo "Deploying to " & strComputer
+        If (IsConnectible(strComputer, 1, 500) = True) Then
+            m_objLogFile.WriteLine "-- Computer found"
+            If (RunProgram(strComputer) = True) Then
+                intSuccess = intSuccess + 1
+                Wscript.Echo "-- success"
+            Else
+                intFailure = intFailure + 1
+                Wscript.Echo "-- failure"
+            End If
+        Else
+            m_objLogFile.WriteLine "-- ### computer not available"
+            intFailure = intFailure + 1
+            Wscript.Echo "-- not available"
+        End If
+    End If
+Next
+
+' Log results.
+m_objLogFile.WriteLine CStr(Now()) & " Deployment finished"
+m_objLogFile.WriteLine "-- Successfully deployed to " & CStr(intSuccess) _
+    & " computers"
+m_objLogFile.WriteLine "-- Failed to deploy to " & CStr(intFailure) _
+    & " computers"
+m_objLogFile.WriteLine "====="
+m_objLogFile.Close
+
+' Notify user.
+Wscript.Echo "Deployment finished. See log " & strLogFile
+
+Function IsConnectible(ByVal strHost, ByVal intPings, ByVal intTO)
+    ' Returns True if strHost can be pinged.
+    ' Based on a program by Alex Angelopoulos and Torgeir Bakken.
+    ' Requires the following variables be declared with global scope:
+    '   m_objShell, m_strTempFile, m_objFSO.
+    ' Modified 09/14/2010 to search for "Reply from" instead of "TTL=".
+
+    Dim objFile, strResults
+
+    If (intPings = "") Then
+        intPings = 2
+    End If
+    If (intTO = "") Then
+        intTO = 750
+    End If
+
+    Const OpenAsDefault = -2
+    Const FailIfNotExist = 0
+    Const ForReading = 1
+
+    ' Ping the host and redirect output to temporary file.
+    m_objShell.Run "%comspec% /c ping -n " & intPings & " -w " & intTO _
+        & " " & strHost & ">" & m_strTempFile, 0, True
+
+    ' Read the temporary file.
+    Set objFile = m_objFSO.OpenTextFile(m_strTempFile, ForReading, _
+        FailIfNotExist, OpenAsDefault)
+    strResults = objFile.ReadAll
+    objFile.Close
+
+    ' Determine if the host responded.
+    If (InStr(strResults, "Reply from") <> 0) Then
+        IsConnectible = True
+    Else
+        IsConnectible = False
+    End If
+End Function
+
+Function RunProgram(ByVal strComputer)
+    ' Function to run a program on a remote computer.
+    ' Returns True if successful, False otherwise.
+    ' Requires the following variables be declared with global scope:
+    '   m_objLogFile, m_strProgram, m_objNetwork, m_blnFirst,
+    '   m_strDrive, m_objSourceFile, m_strCommand, m_objLocal.
+
+    Dim objRemote, objProcess, intReturnCode, objDestFile
+    Dim intWaitTime, blnDelete, objRemoteProcess, colProcesses
+
+    ' Connect to remote computer with WMI.
+    On Error Resume Next
+    Set objRemote = GetObject("winmgmts:" _
+        & "{impersonationLevel=impersonate,authenticationLevel=Pkt}!\\" _
+        & strComputer & "\root\cimv2")
+    If (Err.Number <> 0) Then
+        m_objLogFile.WriteLine _
+            "-- ### Failed to connect with WMI, Error Number: " _
+            & Err.Number & ", Description: " & Err.Description
+        On Error GoTo 0
+        RunProgram = False
+        Exit Function
+    End If
+    On Error GoTo 0
+    m_objLogFile.WriteLine "-- Connected with WMI"
+
+    ' Check if executable running on remote computer.
+    Set colProcesses = objRemote.ExecQuery _
+        ("SELECT * FROM Win32_Process " _
+            & "WHERE Name = '" & m_strProgram & "'")
+    For Each objRemoteProcess In colProcesses
+        m_objLogFile.WriteLine _
+            "-- ### Program already running, no deployment"
+        RunProgram = False
+        Exit Function
+    Next
+
+    ' Map a drive to the root of the C: drive on remote computer.
+    On Error Resume Next
+    m_objNetwork.MapNetworkDrive m_strDrive, "\\" & strComputer & "\C$"
+    If (Err.Number <> 0) Then
+        On Error GoTo 0
+        ' Drive mapping failed. If this is the first computer,
+        ' try another drive letter.
+        If (m_blnFirst = True) Then
+            m_blnFirst = False
+            m_strDrive = "Y:"
+            On Error Resume Next
+            m_objNetwork.MapNetworkDrive m_strDrive, "\\" _
+                & strComputer & "\C$"
+            If (Err.Number <> 0) Then
+                On Error GoTo 0
+                ' Try another drive letter.
+                m_strDrive = "X:"
+                On Error Resume Next
+                m_objNetwork.MapNetworkDrive m_strDrive, "\\" _
+                    & strComputer & "\C$"
+                If (Err.Number <> 0) Then
+                    On Error GoTo 0
+                    m_objLogFile.WriteLine "-- ### Unable to map any drive"
+                    RunProgram = False
+                    Exit Function
+                End If
+            End If
+        Else
+            m_objLogFile.WriteLine "-- ### Unable to map drive " _
+                & m_strDrive
+            RunProgram = False
+            Exit Function
+        End If
+    End If
+    On Error GoTo 0
+    m_blnFirst = False
+    m_objLogFile.WriteLine "-- Drive mapped"
+
+    ' Copy the executable from the local computer to the remote computer.
+    intReturnCode = m_objSourceFile.Copy(m_strDrive & "\\" & m_strProgram)
+    If (intReturnCode <> 0) And (intReturnCode <> 10) Then
+        ' Failure detected and failure was not "file aleady exists".
+        m_objLogFile.WriteLine _
+            "-- ### Failed to copy executable file, Error: " _
+            & CStr(intReturnCode)
+        RunProgram = False
+        ' Remove drive mapping.
+        m_objNetwork.RemoveNetworkDrive m_strDrive, True
+        m_objLogFile.WriteLine "-- Drive mapping removed"
+        Exit Function
+    End If
+    m_objLogFile.WriteLine "-- Executable file copied"
+
+    ' Execute the program on the remote computer.
+    Set objProcess = objRemote.Get("Win32_Process")
+
+    ' Run the program in silent mode.
+    intReturnCode = objProcess.Create("c:\\" & m_strCommand)
+    If (intReturnCode <> 0) Then
+        m_objLogFile.WriteLine "-- ### Failed to start program, Error: " _
+            & CStr(intReturnCode)
+        RunProgram = False
+        ' Remove drive mapping.
+        m_objNetwork.RemoveNetworkDrive m_strDrive, True
+        m_objLogFile.WriteLine "-- Drive mapping removed"
+        Exit Function
+    End If
+    m_objLogFile.WriteLine "-- Program started at " & CStr(Now())
+
+    ' Get reference to the file that was copied.
+    Set objDestFile = m_objLocal.Get("cim_datafile=""" _
+        & m_strDrive & "\\" & m_strProgram & """")
+
+    ' Attempt to delete the file once per second for 2 minutes.
+    ' The file cannot be deleted until the program stops running.
+    blnDelete = False
+    Wscript.Sleep 1000
+    For intWaitTime = 0 To 120
+        ' Pause 1 second
+        Wscript.Sleep 1000
+        ' Check if file can be deleted.
+        If (objDestFile.Delete() = 0) Then
+            blnDelete = True
+            Exit For
+        End If
+    Next
+
+    m_objLogFile.WriteLine "-- Deployment successful at " & CStr(Now())
+
+    If (blnDelete = False) Then
+        m_objLogFile.WriteLine "-- ### Caution: Unable to delete executable"
+    End If
+
+    ' Remove drive mapping.
+    m_objNetwork.RemoveNetworkDrive m_strDrive, True
+    m_objLogFile.WriteLine "-- Drive mapping removed"
+
+    RunProgram = True
+
+End Function

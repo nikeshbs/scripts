@@ -1,0 +1,295 @@
+' ComputerSIDs.vbs
+' VBScript program to find SID prefix value of local SAM account
+' database on all computers in the domain, except Domain Controllers.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2008 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - June 7, 2008
+' Version 1.1 - September 14, 2010 - Modify Ping function for IPv6.
+'
+' Domain Controllers do not have a local SAM account database. This
+' program can be used to find computers with duplicate SID values.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim objShell, objDCList, objSIDList, adoConnection, adoCommand
+Dim objRootDSE, strDNSDomain, strConfig, strBase, strFilter
+Dim strAttributes, strQuery, adoRecordset, objDC
+Dim strNTName, objLocalAdmin, strHexSID, strDecSID
+Dim objComputer, objUser, blnFound
+
+' The wshShell object is required by Function PingMachine.
+Set objShell = CreateObject("Wscript.Shell")
+
+' Dictionary object of Domain Controllers.
+Set objDCList = CreateObject("Scripting.Dictionary")
+objDCList.CompareMode = vbTextCompare
+
+' Dictionary object to keep track of unique SID values.
+Set objSIDList = CreateObject("Scripting.Dictionary")
+objSIDList.CompareMode = vbTextCompare
+
+' Setup ADO objects.
+Set adoCommand = CreateObject("ADODB.Command")
+Set adoConnection = CreateObject("ADODB.Connection")
+adoConnection.Provider = "ADsDSOObject"
+adoConnection.Open "Active Directory Provider"
+adoCommand.ActiveConnection = adoConnection
+
+' Retrieve naming contexts.
+Set objRootDSE = GetObject("LDAP://RootDSE")
+strDNSDomain = objRootDSE.Get("defaultNamingContext")
+strConfig = objRootDSE.Get("configurationNamingContext")
+
+' Construct query to retrieve names of DC's.
+' We want to skip DC's, but include member servers.
+strBase = "<LDAP://" & strConfig  & ">"
+strFilter = "(objectClass=nTDSDSA)"
+strAttributes = "AdsPath"
+strQuery = strBase & ";" & strFilter & ";" & strAttributes & ";subtree"
+
+adoCommand.CommandText = strQuery
+adoCommand.Properties("Page Size") = 100
+adoCommand.Properties("Timeout") = 30
+adoCommand.Properties("Cache Results") = False
+
+' Run the query.
+Set adoRecordset = adoCommand.Execute
+
+' Enumerate the resulting recordset.
+Do Until adoRecordset.EOF
+    ' Retrieve values and add name of DC to dictionary object.
+    Set objDC = GetObject( _
+        GetObject(adoRecordset.Fields("AdsPath").Value).Parent)
+    objDCList.Add objDC.cn, True
+    ' Move to the next record in the recordset.
+    adoRecordset.MoveNext
+Loop
+adoRecordset.Close
+
+' Search entire Active Directory domain.
+strBase = "<LDAP://" & strDNSDomain & ">"
+
+' Filter on computer objects.
+strFilter = "(objectCategory=computer)"
+
+' Comma delimited list of attribute values to retrieve.
+strAttributes = "sAMAccountName"
+
+' Construct the LDAP syntax query.
+strQuery = strBase & ";" & strFilter & ";" & strAttributes & ";subtree"
+adoCommand.CommandText = strQuery
+
+' Run the query.
+Set adoRecordset = adoCommand.Execute
+
+' Enumerate the resulting recordset.
+Do Until adoRecordset.EOF
+    ' Retrieve values.
+    strNTName = adoRecordset.Fields("sAMAccountName").Value
+    ' Remove trailing "$".
+    strNTName = Left(strNTName, Len(strNTName) - 1)
+    ' Check if computer is a DC.
+    If (objDCList.Exists(strNTName) = False) Then
+        ' Ping the computer to make sure it is available.
+        If (PingMachine(strNTName, 1, 750) = True) Then
+            ' Bind to local Administrator user on computer.
+            On Error Resume Next
+            Set objLocalAdmin = GetObject("WinNT://" & strNTName _
+                & "/Administrator,user")
+            If (Err.Number = 0) Then
+                On Error GoTo 0
+                ' Retrieve SID and convert to hex string.
+                strHexSID = OctetToHexStr(objLocalAdmin.objectSID)
+                ' Convert to decimal format.
+                strDecSID = HexSIDToDec(strHexSID)
+                ' Strip off well-known RID, which is "-500".
+                strDecSID = Left(strDecSID, Len(strDecSID) - 4)
+                ' Check for unique SID.
+                If (objSIDList.Exists(strDecSID) = True) Then
+                    ' Duplicate SID. Keep track of computers.
+                    objSIDList.Item(strDecSID) = _
+                        objSIDList.Item(strDecSID) & "," & strNTName
+                Else
+                    objSIDList.Add strDecSID, strNTName
+                End If
+            Else
+                ' Local administrator user may be renamed.
+                ' Bind to the computer.
+                Set objComputer = GetObject("WinNT://" & strNTName _
+                    & ",computer")
+                If (Err.Number = 0) Then
+                    On Error GoTo 0
+                    ' Enumerate all users and search for well-known RID
+                    ' of Administrator user.
+                    objComputer.Filter = Array("user")
+                    blnFound = False
+                    For Each objUser In objComputer
+                        strHexSID = OctetToHexStr(objUser.objectSID)
+                        strDecSID = HexSIDToDec(strHexSID)
+                        If (Right(strDecSID, 4) = "-500") Then
+                            ' Strip off well-known RID.
+                            strDecSID = Left(strDecSID, _
+                                Len(strDecSID) - 4)
+                            ' Check for unique SID.
+                            If (objSIDList.Exists(strDecSID) = True) Then
+                                ' Duplicate SID.
+                                ' Keep track of computers.
+                                objSIDList.Item(strDecSID) = _
+                                    objSIDList.Item(strDecSID) _
+                                    & "," & strNTName
+                            Else
+                                objSIDList.Add strDecSID, strNTName
+                            End If
+                            blnFound = True
+                            Exit For
+                        End If
+                    Next
+                    If (blnFound = False) Then
+                        Wscript.Echo strNTName _
+                            & " administrator user not found"
+                    End If
+                Else
+                    On Error GoTo 0
+                    Wscript.Echo strNTName & " unable to connect"
+                End If
+            End If
+        Else
+            Wscript.Echo strNTName & " not available"
+        End If
+    End If
+    adoRecordset.MoveNext
+Loop
+
+' Display unique SID values and the computers.
+For Each strDecSID In objSIDList.Keys
+    Wscript.Echo strDecSID & ": " & objSIDList.Item(strDecSID)
+Next
+
+' Clean up.
+adoRecordset.Close
+adoConnection.Close
+
+Function PingMachine(ByVal strHost, ByVal intPings, ByVal intTO)
+    ' Returns True if strHost can be pinged.
+    ' strHost is the NetBIOS name or IP address of host computer.
+    ' intPings is number of echo requests to send.
+    ' intTO is timeout in milliseconds to wait for each reply.
+    ' Variable objShell has global scope and must be declared and set
+    ' in the main program. Requires WSH 5.6, which comes standard with
+    ' Windows XP and above.
+    ' Modified 09/14/2010 to search for "Reply from" instead of "TTL=".
+
+    Dim strResults
+    Dim objExecObject
+
+    ' Defaults.
+    If (intPings = "") Then
+        intPings = 2
+    End If
+    If (intTO = "") Then
+        intTO = 750
+    End If
+
+    ' Ping the machine.
+    Set objExecObject = objShell.Exec("%comspec% /c ping -n " _
+        & CStr(intPings) & " -w " & CStr(intTO) & " " & strHost)
+
+    ' Read the output.
+    Do Until objExecObject.StdOut.AtEndOfStream
+        strResults = objExecObject.StdOut.ReadAll
+    Loop
+
+    Select Case InStr(strResults, "Reply from")
+        Case 0
+            ' No response.
+            PingMachine = False
+        Case Else
+            ' Computer responded to ping.
+            PingMachine = True
+    End Select
+
+End Function
+
+Function OctetToHexStr(ByVal arrbytOctet)
+    ' Function to convert OctetString (Byte Array) to a hex string.
+
+    Dim k
+
+    OctetToHexStr = ""
+    For k = 1 To Lenb(arrbytOctet)
+        OctetToHexStr = OctetToHexStr _
+            & Right("0" & Hex(Ascb(Midb(arrbytOctet, k, 1))), 2)
+    Next
+
+End Function
+
+Function HexSIDToDec(ByVal strSID)
+    ' Function to convert most hex SID values to decimal format.
+
+    Dim arrbytSID, lngTemp, j
+
+    ReDim arrbytSID(Len(strSID)/2 - 1)
+    For j = 0 To UBound(arrbytSID)
+        arrbytSID(j) = CInt("&H" & Mid(strSID, 2*j + 1, 2))
+    Next
+
+    If (UBound(arrbytSID) = 11) Then
+        HexSIDToDec = "S-" & arrbytSID(0) & "-" _
+            & arrbytSID(1) & "-" & arrbytSID(8)
+
+        Exit Function
+    End If
+
+    If (UBound(arrbytSID) = 15) Then
+        HexSIDToDec = "S-" & arrbytSID(0) & "-" _
+            & arrbytSID(1) & "-" & arrbytSID(8)
+
+        lngTemp = arrbytSID(15)
+        lngTemp = lngTemp * 256 + arrbytSID(14)
+        lngTemp = lngTemp * 256 + arrbytSID(13)
+        lngTemp = lngTemp * 256 + arrbytSID(12)
+
+        HexSIDToDec = HexSIDToDec & "-" & CStr(lngTemp)
+
+        Exit Function
+    End If
+
+    HexSIDToDec = "S-" & arrbytSID(0) & "-" _
+        & arrbytSID(1) & "-" & arrbytSID(8)
+
+    lngTemp = arrbytSID(15)
+    lngTemp = lngTemp * 256 + arrbytSID(14)
+    lngTemp = lngTemp * 256 + arrbytSID(13)
+    lngTemp = lngTemp * 256 + arrbytSID(12)
+
+    HexSIDToDec = HexSIDToDec & "-" & CStr(lngTemp)
+
+    lngTemp = arrbytSID(19)
+    lngTemp = lngTemp * 256 + arrbytSID(18)
+    lngTemp = lngTemp * 256 + arrbytSID(17)
+    lngTemp = lngTemp * 256 + arrbytSID(16)
+
+    HexSIDToDec = HexSIDToDec & "-" & CStr(lngTemp)
+
+    lngTemp = arrbytSID(23)
+    lngTemp = lngTemp * 256 + arrbytSID(22)
+    lngTemp = lngTemp * 256 + arrbytSID(21)
+    lngTemp = lngTemp * 256 + arrbytSID(20)
+
+    HexSIDToDec = HexSIDToDec & "-" & CStr(lngTemp)
+
+    If (UBound(arrbytSID) > 23) Then
+        lngTemp = arrbytSID(25)
+        lngTemp = lngTemp * 256 + arrbytSID(24)
+
+        HexSIDToDec = HexSIDToDec & "-" & CStr(lngTemp)
+    End If
+
+End Function

@@ -1,0 +1,71 @@
+' ReadCSVFile4.vbs
+' VBScript program to read a comma delimited file with a header line
+' and insert rows into an Access database.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2009 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - September 9, 2009
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim adoCSVConnection, adoCSVRecordSet, strPathToTextfile
+Dim strCSVFile, adoJetConnection, adoJetCommand, strDBPath
+
+Const adCmdText = &H0001
+
+' Specify path to CSV file.
+strPathToTextFile = "c:\Scripts\"
+
+' Specify CSV file name.
+strCSVFile = "Users.csv"
+
+' Specify Access database file.
+strDBPath = "c:\Scripts\MyData.mdb"
+
+' Open connection to the CSV file.
+Set adoCSVConnection = CreateObject("ADODB.Connection")
+Set adoCSVRecordSet = CreateObject("ADODB.Recordset")
+
+' Open CSV file with header line.
+adoCSVConnection.Open "Provider=Microsoft.Jet.OLEDB.4.0;" & _
+    "Data Source=" & strPathtoTextFile & ";" & _
+    "Extended Properties=""text;HDR=YES;FMT=Delimited"""
+
+adoCSVRecordset.Open "SELECT * FROM " & strCSVFile, adoCSVConnection
+
+' Open connection to MS Access database.
+Set adoJetConnection = CreateObject("ADODB.Connection")
+adoJetConnection.ConnectionString = "DRIVER=Microsoft Access Driver (*.mdb);" _
+    & "FIL=MS Access;DriverId=25;DBQ=" & strDBPath & ";"
+adoJetConnection.Open
+
+' ADO command object to insert rows into Access database.
+Set adoJetCommand = New ADODB.Command
+Set adoJetCommand.ActiveConnection = adoJetConnection
+adoJetCommand.CommandType = adCmdText
+
+' Read the CSV file.
+Do Until adoCSVRecordset.EOF
+    ' Insert a row into the Access database.
+    adoJetCommand.CommandText = "INSERT INTO MyTable " _
+        & "(FirstName, MiddleName, LastName, EmployeeID, Comment) " _
+        & "VALUES (" _
+            & "'" & adoCSVRecordset.Fields("First").Value & "', " _
+            & "'" & adoCSVRecordset.Fields("Middle").Value & "', " _
+            & "'" & adoCSVRecordset.Fields("Last").Value & "', " _
+            & adoCSVRecordset.Fields("EmployeeID").Value, " _
+            & "'" & adoCSVRecordset.Fields("Comment").Value & "')"
+    adoJetCommand.Execute
+    adoCSVRecordset.MoveNext
+Loop
+
+' Clean up.
+adoCSVRecordset.Close
+adoCSVConnection.Close
+adoJetConnection.Close

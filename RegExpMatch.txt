@@ -1,0 +1,68 @@
+' RegExpMatch.vbs
+' VBScript program to test various regular expression patterns.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2010 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - May 1, 2010
+'
+' Based on script RegExp.vbs (Listing 7.1 on page 197) from
+' "Windows 2000 Windows Script Host" by Tim Hill,
+' Macmillan Technical Publishing, Copyright 1999.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim objRE, objMatches, objMatch, strPattern, strSearchString
+
+Select Case Wscript.Arguments.Count
+    Case 1
+        strPattern = Wscript.Arguments(0)
+        If (strPattern = "/?") _
+                Or (strPattern = "-?") _
+                Or (strPattern = "?") _
+                Or (strPattern = "/H") _
+                Or (strPattern = "/h") _
+                Or (strPattern = "-H") _
+                Or (strPattern = "-h") _
+                Or (strPattern = "/help") _
+                Or (strPattern = "-help") Then
+            Call Syntax()
+            Wscript.Quit
+        End If
+    Case 2
+        strPattern = Wscript.Arguments(0)
+        strSearchString = Wscript.Arguments(1)
+    Case Else
+        Wscript.Echo "Wrong number of arguments"
+        Call Syntax()
+        Wscript.Quit
+End Select
+
+Wscript.Echo "Pattern: """ & strPattern & """"
+Wscript.Echo "String:  """ & strSearchString & """"
+
+Set objRE = New RegExp
+objRE.Pattern = strPattern
+objRE.Global = True
+Set objMatches = objRE.Execute(strSearchString)
+
+Wscript.Echo "Number of matches: " & objMatches.Count
+For Each objMatch In objMatches
+    Wscript.Echo "Match: " & objMatch.Value & " at: " _
+        & CStr(objMatch.FirstIndex + 1) & " (" & objMatch.Length & ")"
+Next
+
+Sub Syntax()
+    Wscript.Echo "Syntax:"
+    Wscript.Echo "  cscript RegExpMatch.vbs <pattern> <string>"
+    Wscript.Echo "where:"
+    Wscript.Echo "  <pattern> is a regular expression pattern"
+    Wscript.Echo "  <string> is a string to test against the pattern"
+    Wscript.Echo "For example:"
+    Wscript.Echo "  cscript RegExpMatch.vbs ""[a-zA-Z]\w*"" ""objList.Add objDC.cn, True"""
+End Sub

@@ -1,0 +1,77 @@
+' SetPWForUserList1.vbs
+' VBScript program to set the password for a text list of users.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2002-2010 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - November 10, 2002
+' Version 1.1 - February 19, 2003 - Standardize Hungarian notation.
+' Version 1.2 - January 25, 2004 - Modify error trapping.
+' Version 1.3 - March 24, 2007 - Use ForReading constant.
+' Version 1.4 - November 6, 2010 - No need to set objects to Nothing.
+' The input text file is a list of NT names (sAMAccountNames) of each
+' user whose password will be set, one name per line. The program
+' CreateUserList1.vbs can be used to create the file, which should then
+' be modified to include only those users whose passwords will be set.
+' The file can also be created manually. The program sets the password
+' for each user, enables the account, and expires the password so the
+' user must change their password the next time they logon.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim strPassword, objUser, objFSO, strFilePath, strNetBIOSDomain, objFile
+Dim strName
+
+Const ForReading = 1
+
+' Specify the text file of user names, the NetBIOS domain, and the
+' password.
+strFilePath = "c:\MyFolder\UserList1.txt"
+strNetBIOSDomain = "MyDomain"
+strPassword = "password"
+
+' Open the file for read access.
+Set objFSO = CreateObject("Scripting.FileSystemObject")
+Set objFile = objFSO.OpenTextFile(strFilePath, ForReading)
+
+' Read each line of the file, bind to the user object, set the user
+' password, enable the account, and set the password expired.
+Do Until objFile.AtEndOfStream
+    strName = objFile.ReadLine
+    If (strName <> "") Then
+        On Error Resume Next
+        Set objUser = GetObject("WinNT://" & strNetBIOSDomain & "/" _
+            & strName & ",user")
+        If (Err.Number <> 0) Then
+            On Error GoTo 0
+            Wscript.Echo "User " & strName & " NOT found"
+        Else
+            objUser.SetPassword strPassword
+            If (Err.Number <> 0) Then
+                On Error GoTo 0
+                Wscript.Echo "Password NOT set for " & strName
+            Else
+                On Error GoTo 0
+                objUser.AccountDisabled = False
+                objUser.Put "PasswordExpired", 1
+                On Error Resume Next
+                objUser.SetInfo
+                If (Err.Number <> 0) Then
+                    On Error GoTo 0
+                    Wscript.Echo "Unable to set attributes for user " & strName
+                End If
+                On Error GoTo 0
+            End If
+        End If
+    End If
+Loop
+
+' Clean up.
+objFile.Close
+
+Wscript.Echo "Done"

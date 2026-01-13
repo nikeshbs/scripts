@@ -1,0 +1,197 @@
+' ScanSwen.vbs
+' Program to scan Outlook Inbox for messages infected with the
+' W32.Swen virus. Program detects infected messages, logs the
+' number of various types found, and deletes the infected messages.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2003 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - October 20, 2003
+' Version 1.1 - October 21, 2003 - Revise virus signatures.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+' Declare variables.
+Dim objOutlook, objNamespace, objFSO, objLogFile, lngInfected
+Dim lngTotal, lng2k, lng13k, lng64k, lng73k, lng117k, lng145k, lng158k
+Dim strScriptPath, strScriptName, strScriptFolder, objFolder
+Dim objItem, j, k, intAttach, lngCount, strLogFile
+Dim strBody, strHTMLBody, lngSize, blnInfected
+Dim blnExe, blnGif, blnPatch, blnBodyIframe, blnHTMLIframe
+Dim intF11, intF12, intF13, intF14, intF15, intF16
+Dim intF21, intF22, intF23, intF24, intF25, intF26
+
+' Define strings to search for in messages.
+Const strFilter1 = "customers should install the patch"
+Const strFilter2 = "run attached file."
+Const strFilter3 = "<iframe src=""cid:"
+Const strFilter4 = "<iframe src=3d""cid:"
+Const strFilter5 = "<img src=3d""cid:"
+Const strFilter6 = "<img src=""cid:"
+
+' Determine local path.
+strScriptPath = Wscript.ScriptFullName
+strScriptName = Wscript.ScriptName
+strScriptFolder = Left(strScriptPath, Len(strScriptPath) _
+    - Len(strScriptName) - 1)
+
+' Log file name.
+strLogFile = strScriptFolder & "\ScanSwen_" _
+    & Right("0" & Month(Now), 2) & Right("0" & Day(Now), 2) & ".log"
+
+' Setup log file.
+Set objFSO = CreateObject("Scripting.FileSystemObject")
+Set objLogFile = objFSO.OpenTextFile(strLogFile, 8, True, 0)
+objLogFile.WriteLine Now & " - Swen Virus Scan"
+Wscript.Echo "Scanning for Swen virus ..."
+
+' Retrieve Outlook Inbox folder.
+Set objOutlook = CreateObject("Outlook.Application")
+Set objNamespace = objOutlook.GetNamespace("MAPI")
+Set objFolder = objNameSpace.GetDefaultFolder(6)
+
+' Initialize counters.
+lngTotal = 0
+lng2k = 0
+lng13k = 0
+lng64k = 0
+lng73k = 0
+lng117k = 0
+lng145k = 0
+lng158k = 0
+lngInfected = 0
+
+' Enumerate messages in Inbox.
+lngCount = objFolder.Items.Count
+For k = lngCount To 1 Step - 1
+    Set objItem = objFolder.Items(k)
+    lngTotal = lngTotal + 1
+    blnInfected = False
+    blnExe = False
+    blnGif = False
+    blnPatch = False
+    blnBodyIframe = False
+    blnHTMLIframe = False
+    intAttach = objItem.Attachments.Count
+    For j = 1 to intAttach
+        If (InStr(UCase(objItem.Attachments.Item(j).FileName), _
+                ".EXE") > 0) Then
+            blnExe = True
+        End If
+        If (InStr(UCase(objItem.Attachments.Item(j).FileName), _
+                ".GIF") > 0) Then
+            blnGif = True
+        End If
+    Next
+    strBody = LCase(objItem.Body)
+    On Error Resume Next
+    strHTMLBody = LCase(objItem.HTMLBody)
+    If (Err.Number <> 0) Then
+        Err.Clear
+        strHTMLBody = ""
+    End If
+    On Error GoTo 0
+    intF11 = InStr(strBody, strFilter1)
+    intF12 = InStr(strBody, strFilter2)
+    intF13 = InStr(strBody, strFilter3)
+    intF14 = InStr(strBody, strFilter4)
+    intF15 = InStr(strBody, strFilter5)
+    intF16 = InStr(strBody, strFilter6)
+    intF21 = InStr(strHTMLBody, strFilter1)
+    intF22 = InStr(strHTMLBody, strFilter2)
+    intF23 = InStr(strHTMLBody, strFilter3)
+    intF24 = InStr(strHTMLBody, strFilter4)
+    intF25 = InStr(strHTMLBody, strFilter5)
+    intF26 = InStr(strHTMLBody, strFilter6)
+    If ((intF11 > 0) And (intF12 > 0)) _
+           Or ((intF21 > 0) And (intF22 > 0)) Then
+        blnPatch = True
+    End If
+    If (intF13 > 0) Or (intF14 > 0) Or (intF15 > 0) Or (intF16 > 0) Then
+        blnBodyIframe = True
+    End If
+    If (intF23 > 0) Or (intF24 > 0) Or (intF25 > 0) Or (intF26 > 0) Then
+        blnHTMLIframe = True
+    End If
+    lngSize = objItem.Size
+    If (lngSize > 2000) And (lngSize < 24100) Then
+        If (intAttach = 0) And (blnHTMLIframe = True) Then
+            blnInfected = True
+            lng2k = lng2k + 1
+            objLogFile.WriteLine "2" & ";" & objItem.ReceivedTime
+        End If
+    End If
+    If (lngSize > 11000) And (lngSize < 16000) Then
+        If (intAttach = 3) And (blnExe = True) And (blnGif = True) Then
+            If (blnPatch = True) And (blnHTMLIframe = True) Then
+                blnInfected = True
+                lng13k = lng13k + 1
+                objLogFile.WriteLine "13" & ";" & objItem.ReceivedTime
+            End If
+        End If
+    End If
+    If (lngSize > 64000) And (lngSize < 70000) Then
+        If (intAttach = 3) And (blnExe = True) And (blnGif = True) Then
+            If (blnPatch = True) And (blnHTMLIframe = True) Then
+                blnInfected = True
+                lng64k = lng64k + 1
+                objLogFile.WriteLine "64" & ";" & objItem.ReceivedTime
+            End If
+        End If
+    End If
+    If (lngSize > 74000) And (lngSize < 89000) Then
+        If (intAttach = 0) And (blnBodyIframe = True) Then
+            blnInfected = True
+            lng73k = lng73k + 1
+            objLogFile.WriteLine "73" & ";" & objItem.ReceivedTime
+        End If
+    End If
+    If (lngSize > 111000) And (lngSize < 160000) Then
+        If (intAttach = 3) And (blnExe = True) And (blnGif = True) Then
+            If (blnPatch = True) And (blnHTMLIframe = True) Then
+                blnInfected = True
+                lng117k = lng117k + 1
+                objLogFile.WriteLine "117" & ";" & objItem.ReceivedTime
+            End If
+        End If
+    End If
+    If (lngSize > 149000) and (lngSize < 152000) Then
+        If (intAttach = 0) And (blnBodyIframe = True) Then
+            blnInfected = True
+            lng145k = lng145k + 1
+            objLogFile.WriteLine "145" & ";" & objItem.ReceivedTime
+        End If
+    End If
+    If (lngSize > 160000) And (lngSize < 168000) Then
+        If (intAttach = 0) And (blnPatch = True) _
+                And (blnBodyIframe = True) Then
+            blnInfected = True
+            lng158k = lng158k + 1
+            objLogFile.WriteLine "158" & ";" & objItem.ReceivedTime
+        End If
+    End If
+    If (blnInfected = True) Then
+        objItem.Delete
+        lngInfected = lngInfected + 1
+    End If
+Next
+
+objLogFile.WriteLine "Number of 2k infected messages:   " & lng2k
+objLogFile.WriteLine "Number of 13k infected messages:  " & lng13k
+objLogFile.WriteLine "Number of 64k infected messages:  " & lng64k
+objLogFile.WriteLine "Number of 73k infected messages:  " & lng73k
+objLogFile.WriteLine "Number of 117k infected messages: " & lng117k
+objLogFile.WriteLine "Number of 145k infected messages: " & lng145k
+objLogFile.WriteLine "Number of 158k infected messages: " & lng158k
+objLogFile.WriteLine "Infected messages deleted:        " & lngInfected
+objLogFile.WriteLine "Number of messages processed:     " & lngTotal
+objLogFile.WriteLine Now & " - Finished"
+Wscript.Echo "Messages processed: " & lngTotal _
+    & vbCrLf & "Messages infected with Swen virus deleted: " & lngInfected
+
+objLogFile.Close

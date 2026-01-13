@@ -1,0 +1,211 @@
+' PwdExpires.vbs
+' VBScript program to find all user accounts where the password
+' is about to expire in a specified number of days.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2009-2011 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - September 19, 2009
+' Version 1.1 - December 29, 2009 - Handle Null pwdLastSet.
+' Version 1.2 - April 6, 2011 - Correct email address.
+'
+' This program assumes there is one password policy for the domain. The
+' program finds all users whose password will expire in the specified
+' period. The program emails a message to each user found. The program
+' uses the email address in the "mail" attribute, if it has a value.
+' This corresponds to the "E-mail" field on the "General" tab of ADUC.
+' Otherwise, the program uses the "primary" email address in the
+' "proxyAddresses" attribute of the user.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim adoCommand, adoConnection, strBase, strFilter, strAttributes
+Dim objRootDSE, strDNSDomain, strQuery, adoRecordset
+Dim dtmDate1, dtmDate2, intDays, strName, strEmail
+Dim lngSeconds1, str64Bit1, lngSeconds2, str64Bit2
+Dim objShell, lngBiasKey, lngBias, k
+Dim objDomain, objMaxPwdAge, lngHighAge, lngLowAge, sngMaxPwdAge
+Dim objDate, dtmPwdLastSet, dtmExpires
+Dim arrEmails, strItem, strPrefix
+
+' Specify number of days. Any users whose password expires within
+' this many days after today will be processed.
+intDays = 14
+
+' Determine domain maximum password age policy in days.
+Set objRootDSE = GetObject("LDAP://RootDSE")
+strDNSDomain = objRootDSE.Get("DefaultNamingContext")
+Set objDomain = GetObject("LDAP://" & strDNSDomain)
+Set objMaxPwdAge = objDomain.MaxPwdAge
+
+' Account for bug in IADslargeInteger property methods.
+lngHighAge = objMaxPwdAge.HighPart
+lngLowAge = objMaxPwdAge.LowPart
+If (lngLowAge < 0) Then
+    lngHighAge = lngHighAge + 1
+End If
+' Convert from 100-nanosecond intervals into days.
+sngMaxPwdAge = -((lngHighAge * 2^32) _
+    + lngLowAge)/(600000000 * 1440)
+
+' Determine the password last changed date such that the password
+' would just now be expired. We will not process users whose
+' password has already expired.
+dtmDate1 = DateAdd("d", - sngMaxPwdAge, Now())
+
+' Determine the password last changed date such that the password
+' will expire intDays in the future.
+dtmDate2 = DateAdd("d", intDays - sngMaxPwdAge, Now())
+
+' Obtain local Time Zone bias from machine registry.
+' This bias changes with Daylight Savings Time.
+Set objShell = CreateObject("Wscript.Shell")
+lngBiasKey = objShell.RegRead("HKLM\System\CurrentControlSet\Control\" _
+    & "TimeZoneInformation\ActiveTimeBias")
+If (UCase(TypeName(lngBiasKey)) = "LONG") Then
+    lngBias = lngBiasKey
+ElseIf (UCase(TypeName(lngBiasKey)) = "VARIANT()") Then
+    lngBias = 0
+    For k = 0 To UBound(lngBiasKey)
+        lngBias = lngBias + (lngBiasKey(k) * 256^k)
+    Next
+End If
+
+' Convert the datetime values to UTC.
+dtmDate1 = DateAdd("n", lngBias, dtmDate1)
+dtmDate2 = DateAdd("n", lngBias, dtmDate2)
+
+' Find number of seconds since 1/1/1601 for these dates.
+lngSeconds1 = DateDiff("s", #1/1/1601#, dtmDate1)
+lngSeconds2 = DateDiff("s", #1/1/1601#, dtmDate2)
+
+' Convert the number of seconds to a string
+' and convert to 100-nanosecond intervals.
+str64Bit1 = CStr(lngSeconds1) & "0000000"
+str64Bit2 = CStr(lngSeconds2) & "0000000"
+
+' Setup ADO objects.
+Set adoCommand = CreateObject("ADODB.Command")
+Set adoConnection = CreateObject("ADODB.Connection")
+adoConnection.Provider = "ADsDSOObject"
+adoConnection.Open "Active Directory Provider"
+Set adoCommand.ActiveConnection = adoConnection
+
+' Search entire Active Directory domain.
+strBase = "<LDAP://" & strDNSDomain & ">"
+
+' Filter on user objects where the password expires between the
+' dates specified, the account is not disabled, password never
+' expires is not set, password not required is not set,
+' and password cannot change is not set.
+strFilter = "(&(objectCategory=person)(objectClass=user)" _
+    & "(pwdLastSet>=" & str64Bit1 & ")" _
+    & "(pwdLastSet<=" & str64Bit2 & ")" _
+    & "(!userAccountControl:1.2.840.113556.1.4.803:=2)" _
+    & "(!userAccountControl:1.2.840.113556.1.4.803:=65536)" _
+    & "(!userAccountControl:1.2.840.113556.1.4.803:=32)" _
+    & "(!userAccountControl:1.2.840.113556.1.4.803:=48))"
+
+' Comma delimited list of attribute values to retrieve.
+strAttributes = "sAMAccountName,mail,proxyAddresses,pwdLastSet"
+
+' Construct the LDAP syntax query.
+strQuery = strBase & ";" & strFilter & ";" & strAttributes & ";subtree"
+adoCommand.CommandText = strQuery
+adoCommand.Properties("Page Size") = 100
+adoCommand.Properties("Timeout") = 30
+adoCommand.Properties("Cache Results") = False
+
+' Run the query.
+Set adoRecordset = adoCommand.Execute
+
+' Enumerate the resulting recordset.
+Do Until adoRecordset.EOF
+    ' Retrieve values.
+    strName = adoRecordset.Fields("sAMAccountName").Value
+    strEmail = adoRecordset.Fields("mail").Value & ""
+    arrEmails = adoRecordset.Fields("proxyAddresses").Value
+    If (strEmail = "") And (IsNull(arrEmails) = False) Then
+        ' Select primary email address.
+        For Each strItem In arrEmails
+            strPrefix = Left(strItem, 5)
+            If (strPrefix = "SMTP:") Or (strPrefix = "X400:") Then
+                strEmail = Mid(strItem, 6)
+                Exit For
+            End If
+        Next
+    End If
+    ' Determine when password expires.
+    ' The pwdLastSet attribute should always have a value assigned,
+    ' but other Integer8 attributes representing dates could be "Null".
+    If (TypeName(adoRecordset.Fields("pwdLastSet").Value) = "Object") Then
+        Set objDate = adoRecordset.Fields("pwdLastSet").Value
+        dtmPwdLastSet = Integer8Date(objDate, lngBias)
+    Else
+        dtmPwdLastSet = #1/1/1601#
+    End If
+    dtmExpires = DateAdd("d", sngMaxPwdAge, dtmPwdLastSet)
+    If (strEmail <> "") Then
+        ' Send an email message to the user.
+        Call SendEmailMessage(strEmail, strName, dtmExpires)
+        Wscript.Echo "Message for " & strName & " sent to " & strEmail
+    Else
+        Wscript.Echo "No email address for " & strName
+    End If
+    ' Move to the next record in the recordset.
+    adoRecordset.MoveNext
+Loop
+
+' Clean up.
+adoRecordset.Close
+adoConnection.Close
+
+Function Integer8Date(ByVal objDate, ByVal lngBias)
+    ' Function to convert Integer8 (64-bit) value to a date, adjusted for
+    ' local time zone bias.
+    Dim lngAdjust, lngDate, lngHigh, lngLow
+    lngAdjust = lngBias
+    lngHigh = objDate.HighPart
+    lngLow = objDate.LowPart
+    ' Account for error in IADsLargeInteger property methods.
+    If (lngLow < 0) Then
+        lngHigh = lngHigh + 1
+    End If
+    If (lngHigh = 0) And (lngLow = 0) Then
+        lngAdjust = 0
+    End If
+    lngDate = #1/1/1601# + (((lngHigh * (2 ^ 32)) _
+        + lngLow) / 600000000 - lngAdjust) / 1440
+    ' Trap error if lngDate is ridiculously huge.
+    On Error Resume Next
+    Integer8Date = CDate(lngDate)
+    If (Err.Number <> 0) Then
+        On Error GoTo 0
+        Integer8Date = #1/1/1601#
+    End If
+    On Error GoTo 0
+
+End Function
+
+Sub SendEmailMessage(ByVal strDestEmail, ByVal strNTName, ByVal dtmDate)
+    ' Send email message.
+    Dim objMessage
+
+    If (strDestEmail = "") Then
+        Exit Sub
+    End If
+
+    Set objMessage = CreateObject("CDO.Message") 
+    objMessage.Subject = "Password Will Expire"
+    ' Hard code sender email address.
+    objMessage.Sender = "jimsmith@mycompany.com" 
+    objMessage.To = strDestEmail 
+    objMessage.TextBody = "The password for account " & strNTName _
+        & " will expire " & CStr(dtmDate)
+    objMessage.Send
+End Sub

@@ -1,0 +1,101 @@
+' XLToHTML.vbs
+' VBScript program to convert an Excel spreadsheet into an HTML table.
+' A new file is created with the same name as the input file, but with
+' *.htm extension. The contents of the new file can be pasted into a
+' Microsoft TechNet Wiki article, using the "Edit HTML" feature. The
+' First row is assumed to be a header row, defining the fields of the
+' table. This row will be bold.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2012 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - July 13, 2012
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim strXLFile, objExcel, objSheet, intRow, intCol, intColMax
+Dim strFilePath, strNewFile, objFSO, objOutput
+
+Const ForWriting = 2
+Const OpenAsASCII = 0
+Const CreateIfNotExist = True
+
+' One parameter required.
+If (Wscript.Arguments.Count <> 1) Then
+    Wscript.Echo "Required argument, Excel spreadsheet file"
+    Wscript.Quit
+End If
+
+strXLFile = Wscript.Arguments(0)
+
+' Determine new file name.
+Set objFSO = CreateObject("Scripting.FileSystemObject")
+strFilePath = objFSO.GetAbsolutePathName(strXLFile)
+strNewFile = objFSO.GetBaseName(strFilePath) & ".htm"
+
+' Open the specified Excel spreadsheet.
+Set objExcel = CreateObject("Excel.Application")
+objExcel.Workbooks.Open strFilePath
+Set objSheet = objExcel.ActiveWorkbook.Worksheets(1)
+
+' Open new *.htm file for HTML.
+Set objOutput = objFSO.OpenTextFile(strNewFile, _
+    ForWriting, CreateIfNotExist, OpenAsASCII)
+
+' Specify table style.
+objOutput.WriteLine "<table width=""95%"" style=""color: #262626; " _
+    & "font-family: &quot;courier new&quot;; font-size: 11px; " _
+    & "border-collapse: collapse;"" border=""1"" rules=""all"" " _
+    & "frame=""box"" cellspacing=""2"" cellpadding=""1"">"
+objOutput.WriteLine "    <tbody>"
+intRow = 1
+Do While objSheet.Cells(intRow, 1).Value <> ""
+    intCol = 1
+    If (intRow = 1) Then
+        objOutput.WriteLine "        <tr>"
+        Do While objSheet.Cells(1, intCol).Value <> ""
+            objOutput.WriteLine "            <td style=""text-align: " _
+            & "left; padding-left: 5px;""><strong>" _
+            & objSheet.Cells(intRow, intCol).Value & "</strong></td>"
+            intCol = intCol + 1
+        Loop
+        objOutput.WriteLine "        </tr>"
+        intColMax = intCol - 1
+    Else
+        objOutput.WriteLine "        <tr>"
+        For intCol = 1 To intColMax
+            If (objSheet.Cells(intRow, intCol).Value = "") Then
+                objOutput.WriteLine "            <td style=""text-align: " _
+                    & "left; padding-left: 5px;""><br /></td>"
+            Else
+                objOutput.WriteLine "            <td style=""text-align: " _
+                    & "left; padding-left: 5px;"">" _
+                    & objSheet.Cells(intRow, intCol).Value & "</td>"
+            End If
+        Next
+        objOutput.WriteLine "        </tr>"
+    End If
+    intRow = intRow + 1
+Loop
+
+' Output closing tags.
+objOutput.WriteLine "    </tbody>"
+objOutput.WriteLine "</table>"
+
+' Close the workbook.
+objExcel.ActiveWorkbook.Close
+
+' Quit Excel.
+objExcel.Application.Quit
+
+' Close the output file.
+objOutput.Close
+
+' Alert user about the new file.
+Wscript.Echo "New file " & strNewFile _
+    & " with HTML created in the current folder"

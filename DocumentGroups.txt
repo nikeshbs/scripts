@@ -1,0 +1,107 @@
+' DocumentGroups.vbs
+' VBScript program to document all groups in Active Directory.
+' Outputs group name, type of group, all members, and types of member.
+' Lists all groups that are members, but does not list the nested group
+' membership.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2002-2010 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - November 10, 2002
+' Version 1.1 - February 19, 2003 - Standardize Hungarian notation.
+' Version 1.2 - March 11, 2003 - Remove SearchScope property.
+' Version 1.3 - July 6, 2007 - Modify use of Fields collection of
+'                              Recordset object.
+' Version 1.4 - July 27, 2007 - Bug fix if group name has "/" character.
+' Version 1.5 - November 6, 2010 - No need to set objects to Nothing.
+'
+' This script is designed to be run at a command prompt, using the
+' Cscript host. The output can be redirected to a text file.
+' For example:
+' cscript //nologo DocumentGroups.vbs > groups.txt
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim adoConnection, adoCommand, objRootDSE, strDNSDomain, strQuery
+Dim adoRecordset, strDN, objGroup
+
+' Use ADO to search Active Directory.
+Set adoConnection = CreateObject("ADODB.Connection")
+Set adoCommand = CreateObject("ADODB.Command")
+adoConnection.Provider = "ADsDSOObject"
+adoConnection.Open "Active Directory Provider"
+Set adoCommand.ActiveConnection = adoConnection
+
+' Determine the DNS domain from the RootDSE object.
+Set objRootDSE = GetObject("LDAP://RootDSE")
+strDNSDomain = objRootDSE.Get("defaultNamingContext")
+
+' Search for all groups, return the Distinguished Name of each.
+strQuery = "<LDAP://" & strDNSDomain _
+    & ">;(objectClass=group);distinguishedName;subtree"
+adoCommand.CommandText = strQuery
+adoCommand.Properties("Page Size") = 100
+adoCommand.Properties("Timeout") = 30
+adoCommand.Properties("Cache Results") = False
+
+Set adoRecordset = adoCommand.Execute
+If (adoRecordset.EOF = True) Then
+    Wscript.Echo "No groups found"
+    adoRecordset.Close
+    adoConnection.Close
+    Wscript.Quit
+End If
+
+' Enumerate all groups, bind to each, and document group members.
+Do Until adoRecordset.EOF
+    strDN = adoRecordset.Fields("distinguishedName").Value
+    ' Escape any forward slash characters with backslash.
+    strDN = Replace(strDN, "/", "\/")
+    Set objGroup = GetObject("LDAP://" & strDN)
+    Wscript.Echo objGroup.sAMAccountName _
+        & " (" & GetType(objGroup.groupType) & ")"
+    Call GetMembers(objGroup)
+    adoRecordset.MoveNext
+Loop
+adoRecordset.Close
+
+' Clean up.
+adoConnection.Close
+
+Function GetType(ByVal intType)
+    ' Function to determine group type from the GroupType attribute.
+    If ((intType And &h01) <> 0) Then
+        GetType = "Built-in"
+    ElseIf ((intType And &h02) <> 0) Then
+        GetType = "Global"
+    ElseIf ((intType And &h04) <> 0) Then
+        GetType = "Local"
+    ElseIf ((intType And &h08) <> 0) Then
+        GetType = "Universal"
+    End If
+    If ((intType And &h80000000) <> 0) Then
+        GetType = GetType & "/Security"
+    Else
+        GetType = GetType & "/Distribution"
+    End If
+End Function
+
+Sub GetMembers(ByVal objADObject)
+    ' Subroutine to document group membership.
+    ' Members can be users or groups.
+    Dim objMember, strType
+    For Each objMember In objADObject.Members
+        If (UCase(Left(objMember.objectCategory, 8)) = "CN=GROUP") Then
+            strType = "Group"
+        Else
+            strType = "User"
+        End If
+        Wscript.Echo "   Member: " & objMember.sAMAccountName _
+            & " (" & strType & ")"
+    Next
+End Sub

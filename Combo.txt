@@ -1,0 +1,437 @@
+' Combo.vbs
+' VBScript program to generate pseudo random numbers using
+' a combination of 12 32-bit Multiply With Carry Generators.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2007 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - January 2, 2007
+'
+' This generator has a period of about 2.8 * 10^227,
+' which is greater than 2^755.
+' Syntax:
+'     cscript //nologo Combo.vbs <count> <seed> <carry>
+' where:
+'     <count> is the number of random values to display (optional).
+'         Count must be a positive integer. The default count is 10.
+'     <seed> is an initial seed value (optional).
+'         Seed must be an integer greater than or equal to 0 and less
+'         than 2^32. The default value is based on the system timer.
+'     <carry> is an initial carry value (optional).
+'         Carry must be an integer greater than or equal to 0 and less
+'         than 2^32. The default value is based on the system date/time.
+' Program outputs pseudo random integers greater than or equal to 0
+' and less than 2^32.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim lngSeed, lngCarry, k, lngCount, lngTemp
+Dim Seed(11), Carry(11)
+
+' Modulus for Multiply With Carry Generators.
+' M = 2^32 = 4,294,967,296
+Const M = 4294967296
+
+' Constants for Multiply With Carry Generators.
+' A0 = 4,164,903,690 = (A0_Hi * 2^16) + A0_Lo
+Const A0 = 4164903690
+Const A0_Hi = 63551
+Const A0_Lo = 25354
+' A1 = 4,204,114,314 = (A1_Hi * 2^16) + A1_Lo
+Const A1 = 4204114314
+Const A1_Hi = 64149
+Const A1_Lo = 45450
+' A2 = 4,210,396,968 = (A2_Hi * 2^16) + A2_Lo
+Const A2 = 4210396968
+Const A2_Hi = 64245
+Const A2_Lo = 36648
+' A3 = 4,198,054,089 = (A3_Hi * 2^16) + A3_Lo
+Const A3 = 4198054089
+Const A3_Hi = 64057
+Const A3_Lo = 14537
+' A4 = 4,187,999,619 = (A4_Hi * 2^16) + A4_Lo
+Const A4 = 4187999619
+Const A4_Hi = 63903
+Const A4_Lo = 52611
+' A5 = 4,197,999,714 = (A5_Hi * 2^16) + A5_Lo
+Const A5 = 4197999714
+Const A5_Hi = 64056
+Const A5_Lo = 25698
+' A6 = 4,183,234,104 = (A6_Hi * 2^16) + A6_Lo
+Const A6 = 4183234104
+Const A6_Hi = 63831
+Const A6_Lo = 5688
+' A7 = 4,208,029,890 = (A7_Hi * 2^16) + A7_Lo
+Const A7 = 4208029890
+Const A7_Hi = 64209
+Const A7_Lo = 28866
+' A8 = 4,178,097,609 = (A8_Hi * 2^16) + A8_Lo
+Const A8 = 4178097609
+Const A8_Hi = 63752
+Const A8_Lo = 46537
+' A9 = 4,194,774,690 = (A9_Hi * 2^16) + A9_Lo
+Const A9 = 4194774690
+Const A9_Hi = 64007
+Const A9_Lo = 11938
+' A10 = 4,201,298,934 = (A10_Hi * 2^16) + A10_Lo
+Const A10 = 4201298934
+Const A10_Hi = 64106
+Const A10_Lo = 48118
+' A11 = 4,197,302,403 = (A11_Hi * 2^16) + A11_Lo
+Const A11 = 4197302403
+Const A11_Hi = 64045
+Const A11_Lo = 49283
+
+' Retrieve arguments or assign defaults.
+If (Wscript.Arguments.Count = 0) Then
+    ' The default number of pseudo random numbers to display is 10.
+    lngCount = 10
+Else
+    lngCount = Wscript.Arguments(0)
+End If
+
+If (Wscript.Arguments.Count < 2) Then
+    ' Default seed value is based on the system timer.
+    lngSeed = Fix((Timer * M) / (24 * 60 * 60))
+Else
+    lngSeed = Wscript.Arguments(1)
+End If
+
+If (Wscript.Arguments.Count < 3) Then
+    ' Default carry value is based on the system data and time.
+    lngCarry = Fix(Now() * (10^10))
+    lngTemp = Fix(lngCarry / (2^32))
+    lngCarry = lngCarry - ((2^32) * lngTemp)
+
+    ' Avoid trivial cases where seed and carry result in
+    ' Multiply With Carry Generator with period 1.
+    If (lngCarry = 0) And (lngSeed = 0) Then
+        lngCarry = 1
+    End If
+    If (FormatNumber(lngCarry, 0) = FormatNumber((A0 - 1), 0)) _
+            And (FormatNumber(lngSeed, 0) = FormatNumber((M - 1), 0)) Then
+        lngCarry = lngCarry - 1
+    End if
+Else
+    lngCarry = Wscript.Arguments(2)
+End If
+
+' Validate values.
+If (Wscript.Arguments.Count > 3) Then
+    Call Syntax(1)
+    Wscript.Quit
+End If
+Select Case LCase(lngCount)
+    Case "-h", "/h", "help", "-?", "/?", "-help", "/help", "?"
+        Call Syntax(0)
+        Wscript.Quit
+End Select
+
+If (IsNumeric(lngSeed) = False) Then
+    Call Syntax(2)
+    Wscript.Quit
+End If
+If (IsNumeric(lngCarry) = False) Then
+    Call Syntax(3)
+    Wscript.Quit
+End If
+If (IsNumeric(lngCount) = False) Then
+    Call Syntax(4)
+    Wscript.Quit
+End If
+If (lngSeed < 0) Then
+    Call Syntax(5)
+    Wscript.Quit
+End If
+If (lngSeed -  M + 1 > 0) Then
+    Call Syntax(6)
+    Wscript.Quit
+End If
+If (lngCarry < 0) Then
+    Call Syntax(7)
+    Wscript.Quit
+End If
+If (lngCarry - M + 1 > 0) Then
+    Call Syntax(8)
+    Wscript.Quit
+End If
+If (Fix(lngCount) - lngCount <> 0) Then
+    Call Syntax(9)
+    Wscript.Quit
+End If
+If (Fix(lngSeed) - lngSeed <> 0) Then
+    Call Syntax(10)
+    Wscript.Quit
+End If
+If (Fix(lngCarry) - lngCarry <> 0) Then
+    Call Syntax(11)
+    Wscript.Quit
+End If
+If (lngCount < 0) Then
+    Call Syntax(12)
+    Wscript.Quit
+End If
+If (lngCarry = 0) And (lngSeed = 0) Then
+    Call Syntax(13)
+    Wscript.Quit
+End If
+If (FormatNumber(lngCarry, 0) = FormatNumber((A0 - 1), 0)) _
+        And (FormatNumber(lngSeed, 0) = FormatNumber((M - 1), 0)) Then
+    Call Syntax(14)
+    Wscript.Quit
+End if
+
+' Display the initial seed and carry values.
+Wscript.Echo "Initial seed value:  " & FormatNumber(lngSeed, 0)
+Wscript.Echo "Initial carry value: " & FormatNumber(lngCarry, 0)
+
+' Use one Multiply With Carry Generator to generate initial seed
+' and carry values for all Multiply With Carry Generators.
+Call InitialValues(lngSeed, lngCarry)
+
+' Display number of integers requested from the
+' pseudo random number generator.
+Wscript.Echo CStr(lngCount) & " pseudo random integers:"
+Wscript.Echo ""
+For k = 1 To lngCount
+    lngSeed = Combo(Seed(0), Carry(0), Seed(1), Carry(1), _
+        Seed(2), Carry(2), Seed(3), Carry(3), _
+        Seed(4), Carry(4), Seed(5), Carry(5), _
+        Seed(6), Carry(6), Seed(7), Carry(7), _
+        Seed(8), Carry(8), Seed(9), Carry(9), _
+        Seed(10), Carry(10), Seed(11), Carry(11))
+    Wscript.Echo FormatNumber(lngSeed, 0)
+Next
+
+Sub InitialValues(ByVal lngS, ByVal lngC)
+    ' Use one of the Multiply With Carry Generators to
+    ' generate initial values for the seed and carry for
+    ' all twelve Multiply With Carry Generators.
+    ' We need a total of 24 integers greater than or
+    ' equal to 0 and less then 2^32. These 768 bits (96 bytes)
+    ' represent the initial state of the generator.
+    Dim k
+
+    For k = 0 To 11
+        Seed(k) = MWC(lngS, lngC, A0_Hi, A0_Lo)
+        Carry(k) = MWC(lngS, lngC, A0_Hi, A0_Lo)
+
+        ' Check for cases where generator has period of 1.
+        ' One case is where both Seed(k) and Carry(k) are zero,
+        ' but this will never happen because two consecutive zeros
+        ' can never be generated by a Multiply With Carry Generator.
+        ' The other case is when Seed(k) = M - 1 and Carry(k) = A - 1.
+        If FormatNumber(Seed(k), 0) = FormatNumber((M - 1), 0) Then
+            ' If the Carry value results in a period of 1, select the
+            ' next integer in the series, which cannot be the same.
+            Select Case k
+                Case 0
+                    If FormatNumber(Carry(0), 0) = FormatNumber((A0 - 1), 0) Then
+                        Carry(0) = MWC(lngS, lngC, A0_Hi, A0_Lo)
+                    End If
+                Case 1
+                    If FormatNumber(Carry(1), 0) = FormatNumber((A1 - 1), 0) Then
+                        Carry(1) = MWC(lngS, lngC, A0_Hi, A0_Lo)
+                    End If
+                Case 2
+                    If FormatNumber(Carry(2), 0) = FormatNumber((A2 - 1), 0) Then
+                        Carry(2) = MWC(lngS, lngC, A0_Hi, A0_Lo)
+                    End If
+                Case 3
+                    If FormatNumber(Carry(3), 0) = FormatNumber((A3 - 1), 0) Then
+                        Carry(3) = MWC(lngS, lngC, A0_Hi, A0_Lo)
+                    End If
+                Case 4
+                    If FormatNumber(Carry(4), 0) = FormatNumber((A4 - 1), 0) Then
+                        Carry(4) = MWC(lngS, lngC, A0_Hi, A0_Lo)
+                    End If
+                Case 5
+                    If FormatNumber(Carry(5), 0) = FormatNumber((A5 - 1), 0) Then
+                        Carry(5) = MWC(lngS, lngC, A0_Hi, A0_Lo)
+                    End If
+                Case 6
+                    If FormatNumber(Carry(6), 0) = FormatNumber((A6 - 1), 0) Then
+                        Carry(6) = MWC(lngS, lngC, A0_Hi, A0_Lo)
+                    End If
+                Case 7
+                    If FormatNumber(Carry(7), 0) = FormatNumber((A7 - 1), 0) Then
+                        Carry(7) = MWC(lngS, lngC, A0_Hi, A0_Lo)
+                    End If
+                Case 8
+                    If FormatNumber(Carry(8), 0) = FormatNumber((A8 - 1), 0) Then
+                        Carry(8) = MWC(lngS, lngC, A0_Hi, A0_Lo)
+                    End If
+                Case 9
+                    If FormatNumber(Carry(9), 0) = FormatNumber((A9 - 1), 0) Then
+                        Carry(9) = MWC(lngS, lngC, A0_Hi, A0_Lo)
+                    End If
+                Case 10
+                    If FormatNumber(Carry(10), 0) = FormatNumber((A10 - 1), 0) Then
+                        Carry(10) = MWC(lngS, lngC, A0_Hi, A0_Lo)
+                    End If
+                Case 11
+                    If FormatNumber(Carry(11), 0) = FormatNumber((A11 - 1), 0) Then
+                        Carry(11) = MWC(lngS, lngC, A0_Hi, A0_Lo)
+                    End If
+            End Select
+        End If
+    Next
+
+End Sub
+
+Function Combo(ByRef lngX0, ByRef lngC0, ByRef lngX1, ByRef lngC1, _
+        ByRef lngX2, ByRef lngC2, ByRef lngX3, ByRef lngC3, _
+        ByRef lngX4, ByRef lngC4, ByRef lngX5, ByRef lngC5, _
+        ByRef lngX6, ByRef lngC6, ByRef lngX7, ByRef lngC7, _
+        ByRef lngX8, ByRef lngC8, ByRef lngX9, ByRef lngC9, _
+        ByRef lngX10, ByRef lngC10, ByRef lngX11, ByRef lngC11)
+    ' Function to combine 12 Multiply With Carry Generators modulo 2^32.
+    ' Because the period of each of the Multiply With Carry Generators
+    ' is prime, the overall period of this combo generator is the
+    ' product of the periods of the 12 individal generators.
+    ' Period =~ 2.8 * 10^227 =~ 2^755.
+
+    Dim lngTemp
+
+    ' Combine numbers from each of the 12 Multiply With Carry
+    ' Generators, modulo 2^32.
+    Combo = MWC(lngX0, lngC0, A0_Hi, A0_Lo) _
+        + MWC(lngX1, lngC1, A1_Hi, A1_Lo) _
+        + MWC(lngX2, lngC2, A2_Hi, A2_Lo) _
+        + MWC(lngX3, lngC3, A3_Hi, A3_Lo) _
+        + MWC(lngX4, lngC4, A4_Hi, A4_Lo) _
+        + MWC(lngX5, lngC5, A5_Hi, A5_Lo) _
+        + MWC(lngX6, lngC6, A6_Hi, A6_Lo) _
+        + MWC(lngX7, lngC7, A7_Hi, A7_Lo) _
+        + MWC(lngX8, lngC8, A8_Hi, A8_Lo) _
+        + MWC(lngX9, lngC9, A9_Hi, A9_Lo) _
+        + MWC(lngX10, lngC10, A10_Hi, A10_Lo) _
+        + MWC(lngX11, lngC11, A11_Hi, A11_Lo)
+    lngTemp = Fix(Combo / M)
+    Combo = Combo - (M * lngTemp)
+
+End Function
+
+Function MWC(ByRef lngX, ByRef lngC, ByVal A_Hi, ByVal A_Lo)
+    ' pseudo Random Number Generator based on
+    ' the Multiply With Carry Generator
+    '     Xi = [(A * Xi-1) + Ci-1] Mod M
+    '     Ci = Integer[((A * Xi-1) + Ci-1) / M]
+    ' Where:
+    '     M = 2^32 = 4,294,967,296
+    ' Note:
+    '     B = (A * M) - 1
+    '     P = (B - 1) / 2
+    '     A selected so that B and P are both prime.
+    '     The period of the generator is P.
+    ' The values are broken into high and low 16-bit parts as follows:
+    '     A = A_Hi * 2^16 + A_Lo
+    '     lngC = Ci-1 = C_Hi * 2^16 + C_Lo
+    '     lngX = Xi-1 = S_Hi * 2^16 + S_Lo
+    ' lngX and lngC are integers greater than or equal to 0
+    ' and less than M.
+    ' Each time this function is called it returns the next integer in
+    ' a pseudo random sequence. The return value is an integer greater
+    ' than or equal to 0 and less than M. The function also assigns
+    ' new values to lngX and lngC. These new values are required
+    ' for the next time the function is called.
+    ' Note:  There are two cases where this generator will have a
+    ' period of 1. One case is when the initial Ci = 0 and the
+    ' initial Xi = 0. The other case is when the initial Ci = A - 1
+    ' and the initial Xi = M - 1. These trivial cases should be avoided.
+
+    Dim S_Hi, S_Lo, C_Hi, C_Lo
+    Dim F1, F2, F3, T1, T2, T3
+
+    ' Constant for breaking numbers into High and Low 16-bit parts.
+    ' 2^16 = 65,536
+    Const H = 65536
+
+    ' Break up values into high and low 16-bit parts.
+    S_Hi = Fix(lngX / H)
+    S_Lo = lngX - (S_Hi * H)
+    C_Hi = Fix(lngC / H)
+    C_Lo = lngC - (C_Hi * H)
+
+    ' Calculate intermediate results.
+    '     Xi = [(F1 * 2^32) + (F2 * 2^16) + F3] Mod M
+    '     Ci = Int[((F1 * 2^32) + (F2 * 2^16) + F3) / M]
+    F1 = A_Hi * S_Hi
+    F2 = (A_Hi * S_Lo) + (A_Lo * S_Hi) + C_Hi
+    F3 = (A_Lo * S_Lo) + C_Lo
+
+    ' Calculate Xi = [(F1 * 2^32) + (F2 * 2^16) + F3] Mod M.
+    T1 = Fix(F2 / H)
+    T2 = F2 - (T1 * H)
+    lngX = (T2 * H) + F3
+    T3 = Fix(lngX / M)
+    lngX = lngX - (T3 * M)
+
+    ' Calculate Ci = Int[((F1 * 2^32) + (F2 * 2^16) + F3) / M].
+    lngC = Fix((F2 / H) + F1)
+
+    MWC = lngX
+
+End Function
+
+Sub Syntax(ByVal intError)
+    ' Subroutine to display error messages and syntax help.
+
+    Select Case intError
+        Case 1
+            Wscript.Echo "Error, too many arguments."
+        Case 2
+            Wscript.Echo "Error, seed must be numeric value."
+        Case 3
+            Wscript.Echo "Error, carry must be numeric value."
+        Case 4
+            Wscript.Echo "Error, count must be numeric."
+        Case 5
+            Wscript.Echo "Error, seed must be greater than or equal to 0."
+        Case 6
+            Wscript.Echo "Error, seed must be less than 2^32 (4,294,967,296)"
+        Case 7
+            Wscript.Echo "Error, carry must be greater than or equal to 0."
+        Case 8
+            Wscript.Echo "Error, carry must be less than 2^32 (4,294,967,296)"
+        Case 9
+            Wscript.Echo "Error, count must be integer."
+        Case 10
+            Wscript.Echo "Error, seed must be integer."
+        Case 11
+            Wscript.Echo "Error, carry must be integer."
+        Case 12
+            Wscript.Echo "Error, count must be positive."
+        Case 13
+            Wscript.Echo "Error, seed and carry cannot both be zero."
+            Wscript.Echo "Select different values."
+        Case 14
+            Wscript.Echo "Error, carry cannot be 4,164,903,689 if"
+            Wscript.Echo "seed is 4,294,967,295. Select different values."
+        Case Else
+            Wscript.Echo "Combo.vbs - VBScript program to generate random numbers."
+            Wscript.Echo "Syntax:"
+            Wscript.Echo "    cscript //nologo Combo.vbs <count> <seed> <carry>"
+            Wscript.Echo "where:"
+            Wscript.Echo "    <count> is number of random integers to display (optional)."
+            Wscript.Echo "        Count must be a positive integer. Default value is 10."
+            Wscript.Echo "    <seed> is an initial seed value (optional)."
+            Wscript.Echo "        Seed must be an integer greater than or equal to 0"
+            Wscript.Echo "        and less than 2^32. Default value is based"
+            Wscript.Echo "        on the system timer."
+            Wscript.Echo "    <carry> is an initial carry value (optional)."
+            Wscript.Echo "        Carry must be an integer greater than or equal to 0"
+            Wscript.Echo "        and less than 2^32. Default value is based"
+            Wscript.Echo "        on the system date/time."
+            Wscript.Echo "Program outputs pseudo random integers greater than or equal"
+            Wscript.Echo "to 0 and less than 2^32 (4,294,967,296)."
+            Wscript.Echo "Copyright(c) 2007 Richard L. Mueller, Hilltop Lab"
+            Wscript.Echo "Version 1.0 - January 2, 2007"
+    End Select
+
+End Sub

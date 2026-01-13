@@ -1,0 +1,83 @@
+' CommonName.vbs
+' VBScript program to find user object in Active Directory when you know
+' only the Common Name.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2002-2010 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - November 10, 2002
+' Version 1.1 - January 23, 2003 - Use LDAP search dialect instead of
+'                                  SQL.
+' Version 1.2 - February 19, 2003 - Standardize Hungarian notation.
+' Version 1.3 - March 11, 2003 - Correct typo in strFilter.
+' Version 1.4 - April 16, 2003 - Alter to search for all classes of
+'                                objects with the specified cn.
+' Version 1.5 - June 27, 2003 - Do not use RecordCount property of the
+'                               RecordSet object.
+' Version 1.6 - July 6, 2007 - Modify use of Fields collection of
+'                              Recordset object.
+' Version 1.7 - November 6, 2010 - No need to set objects to Nothing.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim strCN, objRootDSE, strDNSDomain, adoCommand, adoConnection
+Dim strBase, strFilter, strAttributes, strQuery, adoRecordset
+Dim strDN, strDisplay, strObjectCategory, intIndex
+
+' Check for required argument.
+If (Wscript.Arguments.Count < 1) Then
+    Wscript.Echo "Required argument <Common Name> missing. For example:" _
+        & vbCrLf & "cscript CommonName.vbs TestUser"
+    Wscript.Quit(0)
+End If
+
+strCN = Wscript.Arguments(0)
+
+' Determine DNS domain name.
+Set objRootDSE = GetObject("LDAP://RootDSE")
+strDNSDomain = objRootDSE.Get("defaultNamingContext")
+
+' Use ADO to search Active Directory.
+Set adoCommand = CreateObject("ADODB.Command")
+Set adoConnection = CreateObject("ADODB.Connection")
+adoConnection.Provider = "ADsDSOObject"
+adoConnection.Open "Active Directory Provider"
+adoCommand.ActiveConnection = adoConnection
+strBase = "<LDAP://" & strDNSDomain & ">"
+
+strFilter = "(cn=" & strCN & ")"
+strAttributes = "distinguishedName,objectCategory"
+strQuery = strBase & ";" & strFilter & ";" & strAttributes & ";subtree"
+adoCommand.CommandText = strQuery
+adoCommand.Properties("Page Size") = 100
+adoCommand.Properties("Timeout") = 30
+adoCommand.Properties("Cache Results") = False
+Set adoRecordset = adoCommand.Execute
+
+If (adoRecordset.EOF = True) Then
+    Wscript.Echo "Object not found with cn=" & strCN
+    Wscript.Quit
+End If
+
+strDisplay = "Object(s) found"
+Do Until adoRecordset.EOF
+    strDN = adoRecordset.Fields("distinguishedName").Value
+    strObjectCategory = adoRecordset.Fields("objectCategory").Value
+    intIndex = InStr(strObjectCategory, "=")
+    strObjectCategory = Mid(strObjectCategory, intIndex + 1)
+    intIndex = InStr(strObjectCategory, ",")
+    strObjectCategory = Mid(strObjectCategory, 1, intIndex - 1)
+    strDisplay = strDisplay & vbCrLf & strDN & " (" _
+        & strObjectCategory & ")"
+    adoRecordset.MoveNext
+Loop
+adoRecordset.Close
+Wscript.Echo strDisplay
+
+' Clean up.
+adoConnection.Close

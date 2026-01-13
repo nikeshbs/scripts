@@ -1,0 +1,114 @@
+' SetPrimaryGroup.vbs
+' VBScript program to set the primary group of a user in Active
+' Directory.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2002-2010 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - November 10, 2002
+' Version 1.1 - February 19, 2003 - Standardize Hungarian notation.
+' Version 1.2 - January 25, 2004 - Modify error trapping.
+' Version 1.3 - July 6, 2007 - Modify use of Fields collection of
+'                              Recordset object.
+' Version 1.4 - July 30, 2007 - Escape any "/" characters in group DN.
+' Version 1.5 - November 6, 2010 - No need to set objects to Nothing.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim adoConnection, adoCommand, objRootDSE, strDNSDomain, strQuery
+Dim objUser, strUserDN, strFilter, strAttributes, strPriGroup
+Dim adoRecordset, intGroupToken, strGroupDN, objGroup
+
+' Specify the user and primary group.
+strUserDN = "cn=TestUser,ou=Sales,dc=MyDomain,dc=com"
+strPriGroup = "East Sales"
+
+' Bind to the user object in Active Directory with the LDAP provider.
+On Error Resume Next
+Set objUser = GetObject("LDAP://" & strUserDN)
+If (Err.Number <> 0) Then
+    On Error GoTo 0
+    Wscript.Echo "User not found" & vbCrLf & strUserDN
+    Wscript.Quit(1)
+End If
+On Error GoTo 0
+
+' Determine the DNS domain from the RootDSE object.
+Set objRootDSE = GetObject("LDAP://RootDSE")
+strDNSDomain = objRootDSE.Get("DefaultNamingContext")
+
+' Use ADO to search Active Directory for the specified group. Return the
+' PrimaryGroupToken attribute of the group. This forces this attribute
+' to be calculated.
+Set adoConnection = CreateObject("ADODB.Connection")
+Set adoCommand = CreateObject("ADODB.Command")
+adoConnection.Provider = "ADsDSOObject"
+adoConnection.Open "Active Directory Provider"
+Set adoCommand.ActiveConnection = adoConnection
+strFilter = "(sAMAccountName=" & strPriGroup & ")"
+strAttributes = "distinguishedName,PrimaryGroupToken"
+strQuery = "<LDAP://" & strDNSDomain & ">;" & strFilter & ";" _
+    & strAttributes & ";subtree"
+adoCommand.CommandText = strQuery
+adoCommand.Properties("Page Size") = 100
+adoCommand.Properties("Timeout") = 30
+adoCommand.Properties("Cache Results") = False
+Set adoRecordset = adoCommand.Execute
+If (adoRecordset.EOF = True) Then
+    Wscript.Echo "Group token not found"
+    adoRecordset.Close
+    adoConnection.Close
+    Wscript.Quit(1)
+End If
+
+' Determine the PrimaryGroupToken of the specified group.
+Do Until adoRecordset.EOF
+    intGroupToken = adoRecordset.Fields("PrimaryGroupToken").Value
+    strGroupDN = adoRecordset.Fields("distinguishedName").Value
+    adoRecordset.MoveNext
+    If (adoRecordset.EOF = False) Then
+        Wscript.Echo "Error finding Primary Group"
+        adoRecordset.Close
+        adoConnection.Close
+        Wscript.Quit(1)
+    End If
+Loop
+adoRecordset.Close
+
+' Escape any forward slash characters, "/", with the backslash
+' escape character. All other characters that should be escaped are.
+strGroupDN = Replace(strGroupDN, "/", "\/")
+
+' Bind to the group object in Active Directory with the LDAP provider.
+Set objGroup = GetObject("LDAP://" & strGroupDN)
+
+' Verify the user is a member of the group.
+If (objGroup.IsMember(objUser.AdsPath) = False) Then
+    Wscript.Echo "User" & vbCrLf & strUserDN & vbCrLf _
+        & "is either NOT a member of the group " & strPriGroup & vbCrLf _
+        & "or already has this group set as the primary group."
+    adoConnection.Close
+    Wscript.Quit(1)
+End If
+
+' Assign the primary group of the user.
+objUser.PrimaryGroupID = intGroupToken
+On Error Resume Next
+objUser.SetInfo
+If (Err.Number = 0) Then
+    On Error GoTo 0
+    Wscript.Echo "Primary Group of user" & vbCrLf & strUserDN & vbCrLf _
+        & "set to group " & strPriGroup
+Else
+    On Error GoTo 0
+    Wscript.Echo "Primary Group of user" & vbCrLf & strUserDN & vbCrLf _
+        & "could NOT be set to group " & strPriGroup
+End If
+
+' Clean up.
+adoConnection.Close

@@ -1,0 +1,48 @@
+' ReadCSVFile3.vbs
+' VBScript program to read a comma delimited file with a header line.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2009 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - September 9, 2009
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim adoCSVConnection, adoCSVRecordSet, strPathToTextfile
+Dim strCSVFile, k
+
+' Specify path to CSV file.
+strPathToTextFile = "c:\Scripts\"
+
+' Specify CSV file name.
+strCSVFile = "DomainUsers.csv"
+
+' Open connection to the CSV file.
+Set adoCSVConnection = CreateObject("ADODB.Connection")
+Set adoCSVRecordSet = CreateObject("ADODB.Recordset")
+
+' Open CSV file with header line.
+adoCSVConnection.Open "Provider=Microsoft.Jet.OLEDB.4.0;" & _
+    "Data Source=" & strPathtoTextFile & ";" & _
+    "Extended Properties=""text;HDR=YES;FMT=Delimited"""
+
+adoCSVRecordset.Open "SELECT * FROM " & strCSVFile, adoCSVConnection
+
+' Read the CSV file.
+Do Until adoCSVRecordset.EOF
+    ' Display all fields by name.
+    For k = 0 To adoCSVRecordset.Fields.Count - 1
+        Wscript.Echo adoCSVRecordset.Fields(k).Name _
+            & " = " & adoCSVRecordset.Fields(k).Value
+    Next
+    adoCSVRecordset.MoveNext
+Loop
+
+' Clean up.
+adoCSVRecordset.Close
+adoCSVConnection.Close

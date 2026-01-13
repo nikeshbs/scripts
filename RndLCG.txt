@@ -1,0 +1,241 @@
+' RndLCG.vbs
+' VBScript program that duplicates the VBScript Rnd function.
+' Generates pseudo random values between 0 and 1 based on a
+' 24-bit Linear Congruential Generator.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2007 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - January 2, 2007
+'
+' Syntax:
+'     cscript //nologo RndLCG.vbs <count> <seed>
+' where:
+'     <count> is an integer, the number of random values to
+'         output. The default count is 10.
+'     <seed> is a seed value from the VBScript Rnd function.
+'         Seed should be greater than or equal to 0 and less
+'         than 1, with 7 significant digits. The default seed
+'         value is based on the system clock.
+' If the specified seed could be included in two series of random
+' numbers from the Rnd function, the two series of numbers are
+' displayed in two columns.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim lngValue, j, k, dblSeed, lngCount, lngValue1,  lngValue2
+
+' Constants for Linear Conguential Generator used by the Rnd function.
+' A = 3 * 227 * 24,373
+' C = 2,293 * 5,591
+' M = 2 ^ 24
+' A mod 8 = 5
+' A is about 0.989 * M
+Const A = 16598013
+Const C = 12820163
+Const M = 16777216
+
+' Retrieve arguments or assign defaults.
+If (Wscript.Arguments.Count = 0) Then
+    ' The default number of pseudo random numbers to display is 10.
+    lngCount = 10
+Else
+    lngCount = Wscript.Arguments(0)
+End If
+
+If (Wscript.Arguments.Count < 2) Then
+    ' Default seed value is based on the system timer.
+    dblSeed = Timer / (24 * 60 * 60)
+Else
+    dblSeed = Wscript.Arguments(1)
+End If
+
+' Validate values.
+If (Wscript.Arguments.Count > 2) Then
+    Call Syntax(1)
+    Wscript.Quit
+End If
+Select Case LCase(lngCount)
+    Case "-h", "/h", "help", "-?", "/?", "-help", "/help", "?"
+        Call Syntax(0)
+        Wscript.Quit
+End Select
+
+If (IsNumeric(dblSeed) = False) Then
+    Call Syntax(2)
+    Wscript.Quit
+End If
+If (IsNumeric(lngCount) = False) Then
+    Call Syntax(3)
+    Wscript.Quit
+End If
+If (dblSeed < 0) Or (dblSeed >= 1) Then
+    Call Syntax(4)
+    Wscript.Quit
+End If
+If (Fix(lngCount) - lngCount <> 0) Then
+    Call Syntax(5)
+    Wscript.Quit
+End If
+If (lngCount < 0) Then
+    Call Syntax(6)
+    Wscript.Quit
+End If
+
+' The seed value must have 7 significant digits.
+dblSeed = FormatNum(dblSeed)
+
+' Determine integer seed value for pseudo random number generator.
+' The correct value will be either this integer, or the integer
+' one less or one greater.
+lngValue = Fix((dblSeed * M) + 0.5)
+
+' Determine all possible integer seed values that will result
+' in the specified value displayed by the Rnd function.
+lngValue1 = -1
+lngValue2 = -1
+For j = lngValue - 1 To lngValue + 1
+    If (Normalize(j) - dblSeed = 0) Then
+        If (lngValue1 = -1) Then
+            lngValue1 = j
+        Else
+            lngValue2 = j
+        End If
+    End If
+Next
+
+' Generate pseudo random numbers.
+If (lngValue2 = -1) Then
+    ' Only one integer results in the specified seed value.
+    ' Display the resulting pseudo random sequence of numbers.
+    For k = 1 To lngCount
+        lngValue1 = LCG(lngValue1)
+        Wscript.Echo Normalize(lngValue1)
+    Next
+Else
+    ' Two integers result in the specified seed. Display both
+    ' resulting pseudo random sequences of numbers.
+    For k = 1 To lngCount
+        lngValue1 = LCG(lngValue1)
+        lngValue2 = LCG(lngValue2)
+        Wscript.Echo Normalize(lngValue1) & ", " & Normalize(lngValue2)
+    Next
+End If
+
+Function LCG(ByRef lngSeed)
+    ' pseudo Random Number Generator based on
+    ' the Linear Congruential Generator
+    '     LCG = (A * lngSeed + C) Mod M
+    ' lngSeed is an integer greater than or equal to 0
+    ' and less than M. Function returns an integer greater
+    ' than or equal to 0 and less than M.
+    ' The integer constants A, C, and M have global scope.
+
+    LCG = A * lngSeed
+    LCG = LCG + C
+    LCG = LCG / M
+    LCG = (LCG - Fix(LCG)) * M
+
+End Function
+
+Sub Syntax(ByVal intError)
+    ' Subroutine to display error messages and syntax help.
+
+    Select Case intError
+        Case 1
+            Wscript.Echo "Error, too many arguments."
+        Case 2
+            Wscript.Echo "Error, seed must be numeric value."
+        Case 3
+            Wscript.Echo "Error, count must be numeric."
+        Case 4
+            Wscript.Echo _
+                "Error, seed must be greater than or equal to 0 and less than 1."
+        Case 5
+            Wscript.Echo "Error, count must be integer."
+        Case 6
+            Wscript.Echo "Error, count must be positive."
+        Case Else
+            Wscript.Echo "RndLCG.vbs - VBScript program to generate pseudo random numbers."
+            Wscript.Echo "This program duplicates the VBScript Rnd function."
+            Wscript.Echo "Syntax:"
+            Wscript.Echo "    cscript //nologo RndLCG.vbs <count> <seed>"
+            Wscript.Echo "where:"
+            Wscript.Echo "    <count> is number of random numbers to display (optional)."
+            Wscript.Echo "        Count must be a positive integer. Default value is 10."
+            Wscript.Echo "    <seed> is a seed value (optional) from the Rnd function."
+            Wscript.Echo "        Seed must be greater than or equal to 0 and less than 1."
+            Wscript.Echo "        Only first 7 significant digits of seed are considered."
+            Wscript.Echo "        Default value is based on the system timer."
+            Wscript.Echo "Program outputs pseudo random numbers greater than or equal"
+            Wscript.Echo "to 0 and less than 1. Because the Rnd function only displays"
+            Wscript.Echo "7 digits, the specified seed may not uniquely identify the"
+            Wscript.Echo "sequence of numbers. In this case, both possible sequences are"
+            Wscript.Echo "displayed in two colunns."
+            Wscript.Echo "Copyright(c) 2007 Richard L. Mueller, Hilltop Lab"
+            Wscript.Echo "Version 1.0 - December 9, 2006"
+    End Select
+
+End Sub
+
+Function Normalize(ByVal lngValue)
+    ' Function to normalize integer (Long) values by dividing by
+    ' modulus, and display to 7 significant digits (rounded).
+
+    ' Normalize the value by dividing by the modulus.
+    Normalize = FormatNum(lngValue / M)
+
+End Function
+
+Function FormatNum(ByVal dblValue)
+    ' Function to display double values to 7 significant
+    ' digits, rounded. This produces values similar to those
+    ' displayed by the VBScript Rnd function.
+
+    Dim lngFactor
+
+    ' Display value rounded to 7 significant digits.
+    If (dblValue >= 0.1) Then
+        lngFactor = 10000000
+        FormatNum = Fix((dblValue * lngFactor) + 0.5) / lngFactor
+        FormatNum = FormatNumber(FormatNum, 7)
+    ElseIf (dblValue >= 0.01) Then
+        lngFactor = 100000000
+        FormatNum = Fix((dblValue * lngFactor) + 0.5) / lngFactor
+        FormatNum = FormatNumber(FormatNum, 8)
+    ElseIf (dblValue >= 0.001) Then
+        lngFactor = 1000000000
+        FormatNum = Fix((dblValue * lngFactor) + 0.5) / lngFactor
+        FormatNum = FormatNumber(FormatNum, 9)
+    ElseIf (dblValue >= 0.0001) Then
+        lngFactor = 10000000000
+        FormatNum = Fix((dblValue * lngFactor) + 0.5) / lngFactor
+        FormatNum = FormatNumber(FormatNum, 10)
+    ElseIf (dblValue >= 0.00001) Then
+        lngFactor = 100000000000
+        FormatNum = Fix((dblValue * lngFactor) + 0.5) / lngFactor
+        FormatNum = FormatNumber(FormatNum, 11)
+    ElseIf (dblValue >= 0.000001) Then
+        lngFactor = 1000000000000
+        FormatNum = Fix((dblValue * lngFactor) + 0.5) / lngFactor
+        FormatNum = FormatNumber(FormatNum, 12)
+    ElseIf (dblValue >= 0.0000001) Then
+        lngFactor = 10000000000000
+        FormatNum = Fix((dblValue * lngFactor) + 0.5) / lngFactor
+        FormatNum = FormatNumber(FormatNum, 13)
+    ElseIf (dblValue >= 0.00000001) Then
+        lngFactor = 100000000000000
+        FormatNum = Fix((dblValue * lngFactor) + 0.5) / lngFactor
+        FormatNum = FormatNumber(FormatNum, 14)
+    Else
+        lngFactor = 1000000000000000
+        FormatNum = Fix((dblValue * lngFactor) + 0.5) / lngFactor
+        FormatNum = FormatNumber(FormatNum, 15)
+    End If
+
+End Function

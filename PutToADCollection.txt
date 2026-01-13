@@ -1,0 +1,56 @@
+' PutToADCollection.vbs
+' VBScript program demonstrating how to set a multi-valued attribute in
+' Active Directory.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2002-2010 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - November 10, 2002
+' Version 1.1 - February 19, 2003 - Standardize Hungarian notation.
+' Version 1.2 - November 6, 2010 - No need to set objects to Nothing.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Const ADS_PROPERTY_APPEND = 3
+
+Dim arrstrAttr(), strEntry, strNewValues, intIndex, k, objUser
+
+' Bind to the user object in Active Directory with the LDAP provider.
+Set objUser = GetObject("LDAP://cn=User2,ou=Sales,dc=MyDomain,dc=com")
+
+' Specify the otherTelephone number entries, in a semicolon delimited
+' string.
+strNewValues = "333-5142;333-5143;333-5144;333-5145"
+
+' Parse the string of entries and populate the array arrstrAttr.
+k = 0
+Do Until strNewValues = ""
+    strNewValues = Trim(strNewValues)
+    intIndex = InStr(strNewValues, ";")
+    If (intIndex = 0) Then
+        strEntry = strNewValues
+        strNewValues = ""
+    ElseIf (intIndex = 1) Then
+        strEntry = ""
+        strNewValues = Mid(strNewValues, 2)
+    Else
+        strEntry = Trim(Mid(strNewValues, 1, intIndex - 1))
+        strNewValues = Mid(strNewValues, intIndex + 1)
+    End If
+    If (strEntry <> "") Then
+        ReDim Preserve arrstrAttr(k)
+        arrstrAttr(k) = strEntry
+        k = k + 1
+    End If
+Loop
+
+' Update the otherTelephone attribute.
+objUser.PutEx ADS_PROPERTY_APPEND, "otherTelephone", arrstrAttr
+objUser.SetInfo
+
+Wscript.Echo "Done"

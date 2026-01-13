@@ -1,0 +1,187 @@
+' CannotChgPW.vbs
+' VBScript program to configure a user so they cannot change their
+' password.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2002-2010 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - November 10, 2002
+' Version 1.1 - February 19, 2003 - Standardize Hungarian notation.
+' Version 1.2 - March 29, 2003 - Reorder ACE's in DACL.
+' Version 1.3 - April 7, 2003 - Use function to reorder ACE's.
+' Version 1.4 - January 25, 2004 - Modify error trapping.
+' Version 1.5 - November 6, 2010 - No need to set objects to Nothing.
+' The Distinguished Name of the user object is passed to the program as
+' a parameter.
+' Based on Microsoft KB articles 301287 and 269159.
+' Requires that ADsSecurity.dll be registered on client.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Const CHANGE_PASSWORD_GUID = "{AB721A53-1E2F-11D0-9819-00AA0040529B}"
+Const ADS_RIGHT_DS_CONTROL_ACCESS = &H100
+Const ADS_ACETYPE_ACCESS_ALLOWED = &H0
+Const ADS_ACETYPE_ACCESS_DENIED = &H1
+Const ADS_ACETYPE_ACCESS_ALLOWED_OBJECT = &H5
+Const ADS_ACETYPE_ACCESS_DENIED_OBJECT = &H6
+Const ADS_ACEFLAG_INHERITED_ACE = &H10
+Const ADS_ACEFLAG_OBJECT_TYPE_PRESENT = &H1
+
+Dim objACESelf, objACEEveryone, objSecDescriptor, objDACL, objUser
+Dim strDN, objACE, blnSelf, blnEveryone, blnModified
+
+' Check for required argument.
+If (Wscript.Arguments.Count < 1) Then
+    Wscript.Echo "Required argument <Distinguished Name> missing. " _
+        & "For example:" & vbCrLf _
+        & "cscript CannotChgPW.vbs cn=TestUser,ou=Sales,dc=MyDomain,dc=com"
+    Wscript.Quit(0)
+End If
+
+' Bind to the user object with the LDAP provider.
+strDN = Wscript.Arguments(0)
+On Error Resume Next
+Set objUser = GetObject("LDAP://" & strDN)
+If (Err.Number <> 0) Then
+    On Error GoTo 0
+    Wscript.Echo "User not found" & vbCrLf & strDN
+    Wscript.Quit(1)
+End If
+On Error GoTo 0
+
+' Bind to the user security objects.
+Set objSecDescriptor = objUser.Get("ntSecurityDescriptor")
+Set objDACL = objSecDescriptor.discretionaryAcl
+
+' Search for ACE's for Change Password and modify.
+blnSelf = False
+blnEveryone = False
+blnModified = False
+For Each objACE In objDACL
+    If (UCase(objACE.objectType) = UCase(CHANGE_PASSWORD_GUID)) Then
+        If (UCase(objACE.Trustee) = "NT AUTHORITY\SELF") Then
+            If (objACE.AceType = ADS_ACETYPE_ACCESS_ALLOWED_OBJECT) Then
+                objACE.AceType = ADS_ACETYPE_ACCESS_DENIED_OBJECT
+                blnModified = True
+            End If
+            blnSelf = True
+        End If
+        If (UCase(objACE.Trustee) = "EVERYONE") Then
+            If (objACE.AceType = ADS_ACETYPE_ACCESS_ALLOWED_OBJECT) Then
+                objACE.AceType = ADS_ACETYPE_ACCESS_DENIED_OBJECT
+                blnModified = True
+            End If
+            blnEveryone = True
+        End If
+    End If
+Next
+
+' If ACE's found and modified, save changes and exit.
+If (blnSelf = True) And (blnEveryone = True) Then
+    If (blnModified = False) Then
+        Wscript.Echo "User already cannot change their password"
+        Wscript.Quit
+    Else
+        objSecDescriptor.discretionaryACL = Reorder(objDACL)
+        objUser.Put "ntSecurityDescriptor", objSecDescriptor
+        objUser.SetInfo
+        Wscript.Echo "User modified so they cannot change their password"
+        Wscript.Quit
+    End If
+End If
+
+' If ACE's not found, add to DACL.
+If (blnSelf = False) Then
+    ' Create the ACE for Self.
+    Set objACESelf = CreateObject("AccessControlEntry")
+    objACESelf.Trustee = "NT AUTHORITY\SELF"
+    objACESelf.AceFlags = 0
+    objACESelf.AceType = ADS_ACETYPE_ACCESS_DENIED_OBJECT
+    objACESelf.Flags = ADS_ACEFLAG_OBJECT_TYPE_PRESENT
+    objACESelf.objectType = CHANGE_PASSWORD_GUID
+    objACESelf.AccessMask = ADS_RIGHT_DS_CONTROL_ACCESS
+    objDACL.AddAce objACESelf
+End If
+
+If (blnEveryone = False) Then
+    ' Create the ACE for Everyone.
+    Set objACEEveryone = CreateObject("AccessControlEntry")
+    objACEEveryone.Trustee = "Everyone"
+    objACEEveryone.AceFlags = 0
+    objACEEveryone.AceType = ADS_ACETYPE_ACCESS_DENIED_OBJECT
+    objACEEveryone.Flags = ADS_ACEFLAG_OBJECT_TYPE_PRESENT
+    objACEEveryone.objectType = CHANGE_PASSWORD_GUID
+    objACEEveryone.AccessMask = ADS_RIGHT_DS_CONTROL_ACCESS
+    objDACL.AddAce objACEEveryone
+End If
+
+objSecDescriptor.discretionaryACL = Reorder(objDACL)
+      
+' Update the user object.
+objUser.Put "ntSecurityDescriptor", objSecDescriptor
+objUser.SetInfo
+
+Wscript.Echo "User denied permission to change their password"
+
+Function Reorder(ByVal objDACL)
+    ' Reorder ACE's in DACL.
+
+    Dim objNewDACL, objInheritedDACL, objAllowDACL, objDenyDACL
+    Dim objAllowObjectDACL, objDenyObjectDACL, objACE
+
+    Set objNewDACL = CreateObject("AccessControlList")
+    Set objInheritedDACL = CreateObject("AccessControlList")
+    Set objAllowDACL = CreateObject("AccessControlList")
+    Set objDenyDACL = CreateObject("AccessControlList")
+    Set objAllowObjectDACL = CreateObject("AccessControlList")
+    Set objDenyObjectDACL = CreateObject("AccessControlList")
+
+    For Each objACE In objDACL
+        If ((objACE.AceFlags And ADS_ACEFLAG_INHERITED_ACE) = _
+                ADS_ACEFLAG_INHERITED_ACE) Then
+            objInheritedDACL.AddAce objACE
+        Else
+            Select Case objACE.AceType
+                Case ADS_ACETYPE_ACCESS_ALLOWED
+                    objAllowDACL.AddAce objACE
+                Case ADS_ACETYPE_ACCESS_DENIED
+                    objDenyDACL.AddAce objACE
+                Case ADS_ACETYPE_ACCESS_ALLOWED_OBJECT
+                    objAllowObjectDACL.AddAce objACE
+                Case ADS_ACETYPE_ACCESS_DENIED_OBJECT
+                    objDenyObjectDACL.AddAce objACE
+                Case Else
+                    blnACL = False
+            End Select
+        End If
+    Next
+        
+    For Each objACE In objDenyDACL
+        objNewDACL.AddAce objACE
+    Next
+      
+    For Each objACE In objDenyObjectDACL
+        objNewDACL.AddAce objACE
+    Next
+        
+    For Each objACE In objAllowDACL
+        objNewDACL.AddAce objACE
+    Next
+        
+    For Each objACE In objAllowObjectDACL
+        objNewDACL.AddAce objACE
+    Next
+        
+    For Each objACE In objInheritedDACL
+        objNewDACL.AddAce objACE
+    Next
+        
+    objNewDACL.ACLRevision = objDACL.ACLRevision
+    Set Reorder = objNewDACL
+
+End Function

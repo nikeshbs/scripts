@@ -1,0 +1,88 @@
+' ComputerRoles.vbs
+' VBScript program to determine the role of all computers in the domain.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2004-2010 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - February 9, 2004
+' Version 1.1 - November 6, 2010 - No need to set objects to Nothing.
+'
+' Program enumerates the NetBIOS name and role of all computer objects
+' in the domain.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim objRootDSE, strDNSDomain, adoConnection, adoCommand, strQuery
+Dim adoRecordset, strComputer
+Dim objWMIService, colComputers, objComputer, intRole, strRole
+
+' Determine DNS domain name from RootDSE object.
+Set objRootDSE = GetObject("LDAP://RootDSE")
+strDNSDomain = objRootDSE.Get("defaultNamingContext")
+
+' Use ADO to search Active Directory for all computers.
+Set adoCommand = CreateObject("ADODB.Command")
+Set adoConnection = CreateObject("ADODB.Connection")
+adoConnection.Provider = "ADsDSOObject"
+adoConnection.Open "Active Directory Provider"
+adoCommand.ActiveConnection = adoConnection
+
+strQuery = "<LDAP://" & strDNSDomain _
+    & ">;(objectCategory=computer);sAMAccountName;subtree"
+
+adoCommand.CommandText = strQuery
+adoCommand.Properties("Page Size") = 100
+adoCommand.Properties("Timeout") = 30
+adoCommand.Properties("Cache Results") = False
+
+Set adoRecordset = adoCommand.Execute
+
+' Enumerate computer objects. Connect to each computer with WMI and
+' determine computer role from Win32_ComputerClass.
+Do Until adoRecordset.EOF
+    strComputer = adoRecordset.Fields("sAMAccountName").Value
+    ' Remove trailing "$".
+    strComputer = Mid(strComputer, 1, Len(strComputer) - 1)
+    On Error Resume Next
+    Set objWMIService = GetObject("winmgmts:" _
+        & "{impersonationLevel=impersonate}!\\" _
+        & strComputer & "\root\cimv2")
+    If (Err.Number <> 0) Then
+        On Error GoTo 0
+        Wscript.Echo strComputer & " does not have WMI installed"
+    Else
+        On Error GoTo 0
+        Set colComputers = objWMIService.ExecQuery _
+            ("SELECT * FROM Win32_ComputerSystem")
+        For Each objComputer In colComputers
+            intRole = objComputer.DomainRole
+            Select Case intRole
+                Case 0
+                    strRole = " is a standalone workstation"
+                Case 1
+                    strRole = " is a member workstation"
+                Case 2
+                    strRole = " is a standalone server"
+                Case 3
+                    strRole = " is a member server"
+                Case 4
+                    strRole = " is a backup domain controller"
+                Case 5
+                    strRole = " is a primary domain controller"
+            End Select
+            Wscript.Echo strComputer & strRole
+        Next
+    End If
+    adoRecordset.MoveNext
+Loop
+adoRecordset.Close
+
+' Clean up.
+adoConnection.Close
+
+Wscript.Echo "Done"

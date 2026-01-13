@@ -1,0 +1,241 @@
+' CreateUsers.vbs
+' VBScript program to create users according to the information in a
+' Microsoft Excel spreadsheet.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2003-2010 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - September 8, 2003
+' Version 1.1 - January 25, 2004 - Modify error trapping.
+' Version 1.2 - March 18, 2004 - Modify NameTranslate constants.
+' Version 2.0 - October 7, 2007 - Specify container for each user object
+'                             in spreadsheet. Accept NT names of groups.
+' Version 2.1 - November 6, 2010 - No need to set objects to Nothing.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim objExcel, strExcelPath, objSheet
+Dim strLast, strFirst, strMiddle, strPW, intRow, intCol
+Dim strGroupDN, objUser, objGroup, objContainer
+Dim strCN, strNTName, strContainerDN
+Dim strHomeFolder, strHomeDrive, objFSO, objShell
+Dim intRunError, strNetBIOSDomain, strDNSDomain
+Dim objRootDSE, objTrans, strLogonScript, strUPN
+Dim strPreviousDN, blnBound
+
+' Constants for the NameTranslate object.
+Const ADS_NAME_INITTYPE_GC = 3
+Const ADS_NAME_TYPE_NT4 = 3
+Const ADS_NAME_TYPE_1779 = 1
+
+' Specify spreadsheet.
+strExcelPath = "c:\MyFolder\NewUsers.xls"
+
+Set objFSO = CreateObject("Scripting.FileSystemObject")
+Set objShell = CreateObject("Wscript.Shell")
+
+' Determine DNS domain name from RootDSE object.
+Set objRootDSE = GetObject("LDAP://RootDSE")
+strDNSDomain = objRootDSE.Get("DefaultNamingContext")
+
+' Use the NameTranslate object to find the NetBIOS domain name
+' from the DNS domain name.
+Set objTrans = CreateObject("NameTranslate")
+objTrans.Init ADS_NAME_INITTYPE_GC, ""
+objTrans.Set ADS_NAME_TYPE_1779, strDNSDomain
+strNetBIOSDomain = objTrans.Get(ADS_NAME_TYPE_NT4)
+' Remove trailing backslash.
+strNetBIOSdomain = Left(strNetBIOSDomain, Len(strNetBIOSDomain) - 1)
+
+' Open spreadsheet.
+Set objExcel = CreateObject("Excel.Application")
+
+On Error Resume Next
+objExcel.Workbooks.Open strExcelPath
+If (Err.Number <> 0) Then
+    On Error GoTo 0
+    Wscript.Echo "Unable to open spreadsheet " & strExcelPath
+    Wscript.Quit
+End If
+On Error GoTo 0
+Set objSheet = objExcel.ActiveWorkbook.Worksheets(1)
+
+' Start with row 2 of spreadsheet.
+' Assume first row has column headings.
+intRow = 2
+
+' Read each row of spreadsheet until a blank value
+' encountered in column 6 (the column for cn).
+' For each row, create user and set attribute values.
+strPreviousDN = ""
+Do While objSheet.Cells(intRow, 6).Value <> ""
+    ' Read values from spreadsheet for this user.
+    strContainerDN = Trim(objSheet.Cells(intRow, 1).Value)
+    strFirst = Trim(objSheet.Cells(intRow, 2).Value)
+    strMiddle = Trim(objSheet.Cells(intRow, 3).Value)
+    strLast = Trim(objSheet.Cells(intRow, 4).Value)
+    strPW = Trim(objSheet.Cells(intRow, 5).Value)
+    strCN = Trim(objSheet.Cells(intRow, 6).Value)
+    strNTName = Trim(objSheet.Cells(intRow, 7).Value)
+    strUPN = Trim(objSheet.Cells(intRow, 8).Value)
+    strHomeFolder = Trim(objSheet.Cells(intRow, 9).Value)
+    strHomeDrive = Trim(objSheet.Cells(intRow, 10).Value)
+    strLogonScript = Trim(objSheet.Cells(intRow, 11).Value)
+
+    ' If this container is different from the previous, bind to
+    ' the container the user object will be created in.
+    If (strContainerDN <> strPreviousDN) Then
+        On Error Resume Next
+        Set objContainer = GetObject("LDAP://" & strContainerDN)
+        If (Err.Number <> 0) Then
+            On Error GoTo 0
+            Wscript.Echo "Unable to bind to container: " & strContainerDN
+            Wscript.Echo "Unable to create user with NT name: " & strNTName
+            ' Flag that container not bound.
+            strPreviousDN = ""
+        Else
+            On Error GoTo 0
+            strPreviousDN = strContainerDN
+        End If
+    End If
+    ' Proceed if parent container bound.
+    If (strPreviousDN <> "") Then
+        ' Create user object.
+        On Error Resume Next
+        Set objUser = objContainer.Create("user", "cn=" & strCN)
+        If (Err.Number <> 0) Then
+            On Error GoTo 0
+            Wscript.Echo "Unable to create user with cn: " & strCN
+        Else
+            On Error GoTo 0
+            ' Assign mandatory attributes and save user object.
+            If (strNTName = "") Then
+                strNTName = strCN
+            End If
+            objUser.sAMAccountName = strNTName
+            On Error Resume Next
+            objUser.SetInfo
+            If (Err.Number <> 0) Then
+                On Error GoTo 0
+                Wscript.Echo "Unable to create user with NT name: " & strNTName
+            Else
+                ' Set password for user.
+                objUser.SetPassword strPW
+                If (Err.Number <> 0) Then
+                    On Error GoTo 0
+                    Wscript.Echo "Unable to set password for user " & strNTName
+                End If
+                On Error GoTo 0
+                ' Enable the user account.
+                objUser.AccountDisabled = False
+                If (strFirst <> "") Then
+                    objUser.givenName = strFirst
+                End If
+                ' Assign values to remaining attributes.
+                If (strMiddle <> "") Then
+                    objUser.initials = strMiddle
+                End If
+                If (strLast <> "") Then
+                    objUser.sn = strLast
+                End If
+                If (strUPN <> "") Then
+                    objUser.userPrincipalName = strUPN
+                End If
+                If (strHomeDrive <> "") Then
+                    objUser.homeDrive = strHomeDrive
+                End If
+                If (strHomeFolder <> "") Then
+                    objUser.homeDirectory = strHomeFolder
+                End If
+                If (strLogonScript <> "") Then
+                    objUser.scriptPath = strLogonScript
+                End If
+                ' Set password expired. Must be changed on next logon.
+                objUser.pwdLastSet = 0
+                ' Save changes.
+                On Error Resume Next
+                objUser.SetInfo
+                If (Err.Number <> 0) Then
+                    On Error GoTo 0
+                    Wscript.Echo "Unable to set attributes for user with NT name: " _
+                        & strNTName
+                End If
+                On Error GoTo 0
+                ' Create home folder.
+                If (strHomeFolder <> "") Then
+                    If (objFSO.FolderExists(strHomeFolder) = False) Then
+                        On Error Resume Next
+                        objFSO.CreateFolder strHomeFolder
+                        If (Err.Number <> 0) Then
+                            On Error GoTo 0
+                            Wscript.Echo "Unable to create home folder: " & strHomeFolder
+                        End If
+                        On Error GoTo 0
+                    End If
+                    If (objFSO.FolderExists(strHomeFolder) = True) Then
+                        ' Assign user permission to home folder.
+                        intRunError = objShell.Run("%COMSPEC% /c Echo Y| cacls " _
+                            & strHomeFolder & " /T /E /C /G " & strNetBIOSDomain _
+                            & "\" & strNTName & ":F", 2, True)
+                        If (intRunError <> 0) Then
+                            Wscript.Echo "Error assigning permissions for user " _
+                                & strNTName & " to home folder " & strHomeFolder
+                        End If
+                    End If
+                End If
+                ' Group DN's start in column 12.
+                intCol = 12
+                Do While objSheet.Cells(intRow, intCol).Value <> ""
+                    strGroupDN = Trim(objSheet.Cells(intRow, intCol).Value)
+                    ' Attempt to bind to group object DN.
+                    blnBound = False
+                    On Error Resume Next
+                    Set objGroup = GetObject("LDAP://" & strGroupDN)
+                    If (Err.Number <> 0) Then
+                        On Error GoTo 0
+                        ' Try  again converting NT Name to DN.
+                        On Error Resume Next
+                        objTrans.Set ADS_NAME_TYPE_NT4, strNetBIOSDomain _
+                            & "\" & strGroupDN
+                        If (Err.Number <> 0) Then
+                            On Error GoTo 0
+                            Wscript.Echo "Unable to bind to group " & strGroupDN
+                        Else
+                            On Error GoTo 0
+                            strGroupDN = objTrans.Get(ADS_NAME_TYPE_1779)
+                            Set objGroup = GetObject("LDAP://" & strGroupDN)
+                            blnBound = True
+                        End If
+                    Else
+                        On Error GoTo 0
+                        blnBound = True
+                    End If
+                    If (blnBound = True) Then
+                        objGroup.Add objUser.AdsPath
+                        If (Err.Number <> 0) Then
+                            On Error GoTo 0
+                            Wscript.Echo "Unable to add user " & strNTName _
+                                & " to group " & strGroupDN
+                        End If
+                    End If
+                    On Error GoTo 0
+                    ' Increment to next group DN.
+                    intCol = intCol + 1
+                Loop
+            End If
+        End If
+    End If
+    ' Increment to next user.
+    intRow = intRow + 1
+Loop
+
+Wscript.Echo "Done"
+
+' Clean up.
+objExcel.ActiveWorkbook.Close
+objExcel.Application.Quit

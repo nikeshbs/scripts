@@ -1,0 +1,57 @@
+' Shutdown5.vbs
+' VBScript Shutdown script.
+' This program demonstrates how to log information to a log file.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2009-2010 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - May 5, 2009
+' Version 1.1 - June 10, 2010 - Delimit log file with ";".
+' Version 1.2 - November 6, 2010 - No need to set objects to Nothing.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim objFSO, objLogFile, objNetwork, objShell, strText, intAns
+Dim intConstants, intTimeout, strTitle, intCount
+Dim strComputerName, strShare, strLogFile
+
+strShare = "\\MyServer\LogFile"
+strLogFile = "Domain.log"
+intTimeout = 20
+
+Set objFSO = CreateObject("Scripting.FileSystemObject")
+Set objNetwork = CreateObject("Wscript.Network")
+Set objShell = CreateObject("Wscript.Shell")
+
+strComputerName = objNetwork.ComputerName
+
+' Log date/time and computer name.
+If (objFSO.FolderExists(strShare) = True) Then
+    On Error Resume Next
+    Set objLogFile = objFSO.OpenTextFile(strShare & "\" _
+        & strLogFile, 8, True, 0)
+    If (Err.Number = 0) Then
+        ' Make three attempts to write to log file.
+        intCount = 1
+        Do Until intCount = 3
+            objLogFile.WriteLine "Shutdown;"  & Now & ";" _
+                & strComputerName & ";<none>;"
+            If (Err.Number = 0) Then
+                intCount = 3
+            Else
+                Err.Clear
+                intCount = intCount + 1
+                If (Wscript.Version > 5) Then
+                    Wscript.Sleep 200
+                End If
+            End If
+        Loop
+        On Error GoTo 0
+        objLogFile.Close
+    End If
+End If

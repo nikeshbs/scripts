@@ -1,0 +1,176 @@
+' CircularNestedGroups.vbs
+' VBScript program to find Circular Nested Groups.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2007 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - January 2, 2007
+' Version 1.1 - March 24, 2007 - Bug fix.
+' Version 1.2 - November 7, 2008 - Combine 2 dictionary objects into 1.
+' Version 2.0 - October 31, 2009 - Bug fix.
+' Version 2.1 - April 29, 2010 - Update comments.
+' Version 2.2 - May 1, 2010 - Bug fix (found by Magne Hagane).
+'
+' Uses ADO to retrieve all groups and their members that are groups.
+' For each group, tracks membership to see if the group is a nested
+' member of itself. Reports the number of such instances found and
+' the names of the groups involved.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim objRootDSE, strDNSDomain, adoCommand, adoConnection
+Dim strBase, strFilter, strAttributes, strQuery, adoRecordset
+Dim strDN, arrstrMembers, strMember, lngCount
+Dim objGroupMembers, strGroupList
+Dim arrstrGroups, strGroup
+
+' Setup dictionary object of group memberships.
+' The key value is the group distinguished name.
+' The item value is an array of members of the group, but
+' only members that are groups. Any groups that do not have
+' group members have an empty array.
+Set objGroupMembers = CreateObject("Scripting.Dictionary")
+objGroupMembers.CompareMode = vbTextCompare
+
+' Determine DNS domain name.
+Set objRootDSE = GetObject("LDAP://RootDSE")
+strDNSDomain = objRootDSE.Get("defaultNamingContext")
+
+' Use ADO to search Active Directory.
+Set adoCommand = CreateObject("ADODB.Command")
+Set adoConnection = CreateObject("ADODB.Connection")
+adoConnection.Provider = "ADsDSOObject"
+adoConnection.Open "Active Directory Provider"
+adoCommand.ActiveConnection = adoConnection
+
+' Search entire domain.
+strBase = "<LDAP://" & strDNSDomain & ">"
+
+' Filter on group objects.
+strFilter = "(objectCategory=group)"
+
+' Comma delimited list of attribute values to retrieve.
+' The member attribute of group objects is a multi-valued attribute.
+strAttributes = "distinguishedName,member"
+
+' Construct the ADO query, using LDAP syntax.
+strQuery = strBase & ";" & strFilter & ";" & strAttributes & ";subtree"
+
+' Run the query.
+adoCommand.CommandText = strQuery
+adoCommand.Properties("Page Size") = 100
+adoCommand.Properties("Timeout") = 30
+adoCommand.Properties("Cache Results") = False
+Set adoRecordset = adoCommand.Execute
+
+' Enumerate the recordset and populate dictionary object
+' with distinguished names of all groups in the domain.
+' The item value starts out as an empty array.
+Do Until adoRecordset.EOF
+    strDN = adoRecordset.Fields("distinguishedName").Value
+    objGroupMembers(strDN) = Array("")
+    adoRecordset.MoveNext
+Loop
+adoRecordset.Close
+
+' Reopen the recordset so we can read it again.
+adoRecordset.Open
+
+' Enumerate the recordset and populate dictionary object with
+' group memberships.
+Do Until adoRecordset.EOF
+    strDN = adoRecordset.Fields("distinguishedName").Value
+    arrstrMembers = adoRecordset.Fields("member").Value
+    ' Check if this group has any members.
+    If Not IsNull(arrstrMembers) Then
+        ' Group has at least one member.
+        If (TypeName(arrstrMembers) = "String") Then
+            ' Group has one member. Check if this member is a group.
+            If objGroupMembers.Exists(arrstrMembers) Then
+                ' Member is a group. Convert to an array (one element)
+                ' and update dictionary object of group memberships.
+                arrstrMembers = Replace(arrstrMembers, ";", "^^#")
+                objGroupMembers(strDN) = Array(arrstrMembers)
+            End If
+        Else
+            ' Group has more than one member.
+            ' Create semicolon delimited list of group members.
+            strGroupList = ""
+            For Each strMember In arrstrMembers
+                ' Check if this member is a group. If so, add to
+                ' semicolon delimited list of group members.
+                If objGroupMembers.Exists(strMember) Then
+                    strMember = Replace(strMember, ";", "^^#")
+                    If (strGroupList = "") Then
+                        strGroupList = strMember
+                    Else
+                        strGroupList = strGroupList & ";" & strMember
+                    End If
+                End If
+            Next
+            ' If the list is not blank, convert to an array and
+            ' update dictionary object of group memberships.
+            If (strGroupList <> "") Then
+                objGroupMembers(strDN) = Split(strGroupList, ";")
+            End If
+        End If
+    End If
+    adoRecordset.MoveNext
+Loop
+adoRecordset.Close
+
+' Count number of Circular Nested Groups found.
+lngCount = 0
+' Retrieve array of all groups in the domain.
+arrstrGroups = objGroupMembers.Keys
+' Enumerate all groups and check group membership of each.
+For Each strGroup In arrstrGroups
+    ' Check group membership of each group to
+    ' detect Circular Nesting.
+    Call Members(strGroup, Array(strGroup))
+Next
+
+Wscript.Echo "Number of Circular Nested Groups found = " & CStr(lngCount)
+
+' Clean up.
+adoConnection.Close
+
+Sub Members(ByVal strGroup, ByVal arrstrParents)
+    ' Recursive subroutine to enumerate group members of a group.
+    ' strGroup is the group whose membership is being enumerated.
+    ' arrstrParents is an array of all parent groups of strGroup.
+    ' If any group member name matches any of the parents, we have
+    ' detected an instance of Circular Nesting.
+    ' Variables lngCount and objGroupMembers have global scope.
+
+    Dim strMember, strParent
+
+    ' Enumerate all group members of group strGroup.
+    For Each strMember In objGroupMembers(strGroup)
+        ' Check if this group member matches any parent group.
+        ' If so, this is an instance of Circular Group Nesting.
+        For Each strParent In arrstrParents
+            If (strMember = strParent) Then
+                strParent = Replace(strParent, "^^#", ";")
+                Wscript.Echo "Circular Nested Group: " & strParent
+                lngCount = lngCount + 1
+                ' Avoid infinite loop.
+                Exit Sub
+            End If
+        Next
+        ' Check all group members for group membership.
+        If objGroupMembers.Exists(strMember) Then
+            ' Add this member to array of parent groups.
+            ' Modified 05/01/2010 to only affect parents of this
+            ' group and not siblings.
+            ' Recursively call subroutine to find nested groups.
+            Call Members(strMember, _
+                Split(Join(arrstrParents, ";") & ";" & strMember, ";"))
+        End If
+    Next
+End Sub

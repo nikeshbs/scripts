@@ -1,0 +1,257 @@
+' VbsToHtml.vbs
+' VBScript program to read VBScript code from a text file and convert
+' into HTML, with colorization. For use in a Microsoft Forum message.
+' A new file is created with the same name as the input file, but with
+' *.htm extension. The contents of the new file can be pasted into a
+' forum message using the "Edit HTML Source" feature. This ensures that
+' the code snippet maintains spacing and uses a fixed-width font.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2011-2012 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - October 9, 2011
+' Version 1.1 - October 12, 2011 - Handle tabs in code, more keywords.
+' Version 1.2 - February 7, 2012 - Add border around the code.
+' Version 1.3 - February 8, 2012 - Preserve all embedded spacing.
+' Version 1.4 - February 18, 2012 - Remove border, add horizontal line.
+' Version 1.5 - February 23, 2012 - Replace horizontal line with gray border.
+' Version 1.6 - April 27, 2012 - Add switch to omit gray border.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim strInputFile, objFSO, objInput, strLine
+Dim strFilePath, strNewFile, objOutput, objList, k
+Dim strWord, strChar, strNewLine
+Dim blnQuote, strQuote, strComment, blnBorder
+
+Const ForReading = 1
+Const ForWriting = 2
+Const OpenAsASCII = 0
+Const CreateIfNotExist = True
+
+' One parameter required.
+If (Wscript.Arguments.Count <> 1) And (Wscript.Arguments.Count <> 2) Then
+    Wscript.Echo "File name required"
+    Wscript.Echo "Syntax:"
+    Wscript.Echo "cscript //nologo VbsToHtml.vbs Example.vbs"
+    Wscript.Echo "This program will create file Example.htm"
+    Wscript.Echo "You can also specify the optional parameter ""/nb"" to omit the gray border"
+    Wscript.Quit
+End If
+
+Set objList = CreateObject("Scripting.Dictionary")
+objList.CompareMode = vbTextCompare
+
+' Open the specified file of code for reading.
+strInputFile = Wscript.Arguments(0)
+Set objFSO = CreateObject("Scripting.FileSystemObject")
+Set objInput = objFSO.OpenTextFile(strInputFile, ForReading)
+
+blnBorder = True
+If (Wscript.Arguments.Count = 2) Then
+    If (LCase(Wscript.Arguments(1)) = "/nb") Then
+        blnBorder = False
+    Else
+        Wscript.Echo "If included, the second paramter must be ""/nb"", to omit the gray border"
+        Wscript.Echo "Syntax:"
+        Wscript.Echo "cscript //nologo VbsToHtml.vbs Example.vbs /nb"
+        Wscript.Echo "This program will create file Example.htm"
+        Wscript.Quit
+    End If
+End If
+
+' Determine new file name.
+strFilePath = objFSO.GetAbsolutePathName(strInputFile)
+strNewFile = objFSO.GetBaseName(strFilePath) & ".htm"
+
+' Open new *.htm file for HTML.
+Set objOutput = objFSO.OpenTextFile(strNewFile, _
+    ForWriting, CreateIfNotExist, OpenAsASCII)
+
+' Output opening paragraph tag, using fixed width font.
+If (blnBorder = True) Then
+    objOutput.WriteLine "<p style=""font-family:Courier New,Courier;border:1px solid gray"">"
+Else
+    ' Output horizontal line.
+    objOutput.WriteLine "<hr />"
+    objOutput.WriteLine "<p style=""font-family:Courier New,Courier"">"
+End If
+
+objList.Add "Option", True
+objList.Add "Explicit", True
+objList.Add "Dim", True
+objList.Add "ReDim", True
+objList.Add "Preserve", True
+objList.Add "Const", True
+objList.Add "On", True
+objList.Add "Error", True
+objList.Add "Resume", True
+objList.Add "Next", True
+objList.Add "GoTo", True
+objList.Add "Set", True
+objList.Add "Nothing", True
+objList.Add "Do", True
+objList.Add "Until", True
+objList.Add "If", True
+objList.Add "And", True
+objList.Add "Or", True
+objList.Add "Xor", True
+objList.Add "Not", True
+objList.Add "Then", True
+objList.Add "Exit", True
+objList.Add "Loop", True
+objList.Add "While", True
+objList.Add "True", True
+objList.Add "False", True
+objList.Add "Select", True
+objList.Add "Case", True
+objList.Add "End", True
+objList.Add "Else", True
+objList.Add "Call", True
+objList.Add "Sub", True
+objList.Add "ByVal", True
+objList.Add "ByRef", True
+objList.Add "Function", True
+objList.Add "For", True
+objList.Add "Each", True
+objList.Add "In", True
+
+' Read the code from the file.
+Do Until objInput.AtEndOfStream
+    strLine = objInput.ReadLine
+
+    ' Replace symbols.
+    strLine = Replace(strLine, "&", "&amp;")
+    strLine = Replace(strLine, "<", "&lt;")
+    strLine = Replace(strLine, ">", "&gt;")
+
+    ' Check for comments, quoted strings, and keywords.
+    strNewLine = ""
+    strWord = ""
+    blnQuote = False
+    strQuote = ""
+    For k = 1 To Len(strLine)
+        strChar = Mid(strLine, k, 1)
+        Select Case strChar
+            Case "'"
+                ' Single quote character.
+                If (blnQuote = False) Then
+                    ' A single quote not in a quoted string indicates a comment.
+                    ' Comments always continue to the end of the line.
+                    strComment = Mid(strLine, k)
+                    ' Replace symbols.
+                    strComment = Replace(strComment, """", "&quot;")
+                    strComment = Replace(strComment, "'", "&#39;")
+                    If (strWord <> "") Then
+                        strNewLine = strNewLine & strWord
+                    End If
+                    ' Comments are colored green.
+                    strNewLine = strNewLine & "<span style=""color: green;"">" _
+                        & Trim(strComment) & "</span>"
+                    ' Ignore everything that follows on this line.
+                    strWord = ""
+                    Exit For
+                End If
+                ' Single quote in quoted string.
+                strQuote = strQuote & "&#39;"
+            Case """"
+                ' Double quote character.
+                If (blnQuote = False) Then
+                    ' Start of a quoted string.
+                    blnQuote = True
+                    strQuote = strQuote & "&quot;"
+                    If (strWord <> "") Then
+                        strNewLine = strNewLine & strWord
+                        strWord = ""
+                    End If
+                Else
+                    If (k < Len(strLine)) Then
+                        ' Check if the next character is a quote.
+                        If (Mid(strLine, k + 1, 1) = """") Then
+                            ' Two quote characters in a row.
+                            strQuote = strQuote & "&quot;"
+                            ' Next character, a quote, will be treated as the start
+                            ' of a quoted string, except strQuote will not be blank.
+                            blnQuote = False
+                        Else
+                            ' This terminates a string. Strings are colored red.
+                            strQuote = strQuote & "&quot;"
+                            strNewLine = strNewLine & "<span style=""color: #a31515;"">" _
+                                & strQuote & "</span>"
+                            strQuote = ""
+                            blnQuote = False
+                            strWord = ""
+                        End If
+                    Else
+                        ' This terminates a string. Strings are colored red.
+                        strQuote = strQuote & "&quot;"
+                        strNewLine = strNewLine & "<span style=""color: #a31515;"">" _
+                            & strQuote & "</span>"
+                        strQuote = ""
+                        blnQuote = False
+                        strWord = ""
+                    End If
+                End If
+            Case " "
+                ' Space character.
+                If (blnQuote = True) Then
+                    ' Space is part of the quoted string.
+                    strQuote = strQuote & strChar
+                Else
+                    ' Space delimits a word. Check for keyword.
+                    If (objList.Exists(strWord) = True) Then
+                        ' Keywords are colored blue.
+                        strWord = "<span style=""color: blue"">" & strWord & "</span>"
+                    End If
+                    strNewLine = strNewLine & strWord & strChar
+                    strWord = ""
+                End If
+            Case Else
+                ' Any character other than single quote, double quote, or space.
+                If (blnQuote = True) Then
+                    strQuote = strQuote & strChar
+                Else
+                    strWord = strWord & strChar
+                End If
+        End Select
+    Next
+    If (strWord <> "") Then
+        If (objList.Exists(strWord) = True) Then
+            ' Keywords are colored blue.
+            strWord = "<span style=""color: blue"">" & strWord & "</span>"
+        End If
+        strNewLine = strNewLine & strWord
+    End If
+
+    ' Replace any tab characters with four space characters.
+    strNewLine = Replace(strNewLine, vbTab, "&nbsp;&nbsp;&nbsp;&nbsp;")
+    ' Preserve all spacing.
+    strNewLine = Replace(strNewLine, "  ", "&nbsp;&nbsp;")
+    ' Preserve leading single space.
+    If (Left(strNewLine, 1) = " ") Then
+        strNewLine = "&nbsp;" & Mid(strNewLine, 2)
+    End If
+
+    ' Output the line with a trailing carriage return.
+    objOutput.WriteLine strNewLine & "<br />"
+Loop
+
+objInput.Close
+
+' Output closing paragraph tag.
+objOutput.WriteLine "</p>"
+
+' Add a <pre> tag to flag this as code.
+objOutput.WriteLine "<pre>-----</pre>"
+objOutput.WriteLine "<p><br /></p>"
+
+' Close output file.
+objOutput.Close
+
+' Alert user about the new file.
+Wscript.Echo "File " & strNewFile & " with HTML created in the current folder"

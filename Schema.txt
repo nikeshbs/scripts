@@ -1,0 +1,72 @@
+' Schema.vbs
+' VBScript program to document all attributes in Active Directory.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2002 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - March 5, 2003
+' Version 1.1 - March 15, 2003 - Determine if attributes replicated.
+'
+' This script is designed to be run at a command prompt, using the
+' Cscript host. The output can be redirected to a text file. For
+' example:
+' cscript //nologo Schema.vbs > Schema.txt
+'
+' Output text file will have fields delimited by semicolons. This
+' file can be imported into a spreadsheet program. The fields are:
+'
+' Attribute common name
+' LDAP display name
+' Attribute syntax designation
+' Boolean indicating if single-valued
+' Boolean indicating if replicated to Global Catalog
+' Boolean indicating if indexed
+' Boolean indicating if constructed (operational)
+' Boolean indicating if replicated to other Domain Controllers in domain
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Const IS_INDEXED = 1
+Const ADS_SYSTEMFLAG_ATTR_IS_CONSTRUCTED = &H4
+Const ADS_SYSTEMFLAG_ATTR_NOT_REPLICATED = &H1
+
+Dim objRootDSE, objSchema, objAttribute, intSearchFlags, intSystemFlags
+Dim blnConstructed, blnIndexed, blnReplicated
+
+Set objRootDSE = GetObject("LDAP://RootDSE")
+Set objSchema = GetObject("LDAP://" _
+    & objRootDSE.Get("schemaNamingContext"))
+
+For Each objAttribute in objSchema
+    If (LCase(Left(objAttribute.objectCategory, 19)) _
+            = "cn=attribute-schema") Then
+        intSearchFlags = objAttribute.searchFlags
+        intSystemFlags = objAttribute.systemFlags
+        If ((intSearchFlags And IS_INDEXED) <> 0) Then
+            blnIndexed = True
+        Else
+            blnIndexed = False
+        End If
+        If ((intSystemFlags And ADS_SYSTEMFLAG_ATTR_IS_CONSTRUCTED) <> 0) Then
+            blnConstructed = True
+        Else
+            blnConstructed = False
+        End If
+        If ((intSystemFlags And ADS_SYSTEMFLAG_ATTR_NOT_REPLICATED) <> 0) Then
+            blnReplicated = False
+        Else
+            blnReplicated = True
+        End If
+        Wscript.Echo objAttribute.cn & " ; " _
+            & objAttribute.lDAPDisplayName & " ; " _
+            & objAttribute.attributeSyntax & " ; " _
+            & objAttribute.isSingleValued & " ; " _
+            & objAttribute.isMemberOfPartialAttributeSet & " ; " _
+            & blnIndexed & " ; " & blnConstructed & " ; " & blnReplicated
+    End If
+Next

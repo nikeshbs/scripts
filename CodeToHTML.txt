@@ -1,0 +1,117 @@
+' CodeToHTML.vbs
+' VBScript program to read code from a text file and convert into HTML.
+' For use in a Microsoft Forum message. A new file is created with the
+' same name as the input file, but with *.htm extension. The contents
+' of the new file can be pasted into a forum message using the "Edit
+' HTML Source" feature. This ensures that the code snippet maintains
+' spacing and indenting and uses a fixed-width font. This program does
+' not colorize the code.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2011-2012 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - May 21, 2011
+' Version 1.1 - May 28, 2011 - Modify to have the program create *.htm.
+' Version 1.2 - July 18, 2011 - Add <pre> tag to flag reply has code.
+' Version 1.3 - October 12, 2011 - Handle tabs in code.
+' Version 1.4 - February 7, 2012 - Add border around the code.
+' Version 1.5 - February 8, 2012 - Preserve all embedded spacing.
+' Version 1.6 - February 18, 2012 - Remove border, add horizontal line.
+' Version 1.7 - February 23, 2012 - Replace horizontal line with gray border.
+' Version 1.8 - April 27, 2012 - Add switch to omit gray border.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim strInputFile, objFSO, objInput, strLine
+Dim strFilePath, strNewFile, objOutput, blnBorder
+
+Const ForReading = 1
+Const ForWriting = 2
+Const OpenAsASCII = 0
+Const CreateIfNotExist = True
+
+' One parameter required.
+If (Wscript.Arguments.Count <> 1) And (Wscript.Arguments.Count <> 2) Then
+    Wscript.Echo "File name required"
+    Wscript.Echo "Syntax:"
+    Wscript.Echo "cscript //nologo CodeToHTML.vbs Example.vbs"
+    Wscript.Echo "This program will create file Example.htm"
+    Wscript.Echo "You can also specify the optional parameter ""/nb"" to omit the gray border"
+    Wscript.Quit
+End If
+
+' Open the specified file of code for reading.
+strInputFile = Wscript.Arguments(0)
+Set objFSO = CreateObject("Scripting.FileSystemObject")
+Set objInput = objFSO.OpenTextFile(strInputFile, ForReading)
+
+blnBorder = True
+If (Wscript.Arguments.Count = 2) Then
+    If (LCase(Wscript.Arguments(1)) = "/nb") Then
+        blnBorder = False
+    Else
+        Wscript.Echo "If included, the second paramter must be ""/nb"", to omit the gray border"
+        Wscript.Echo "Syntax:"
+        Wscript.Echo "cscript //nologo CodeToHtml.vbs Example.vbs /nb"
+        Wscript.Echo "This program will create file Example.htm"
+        Wscript.Quit
+    End If
+End If
+
+' Determine new file name.
+strFilePath = objFSO.GetAbsolutePathName(strInputFile)
+strNewFile = objFSO.GetBaseName(strFilePath) & ".htm"
+
+' Open new *.htm file for HTML.
+Set objOutput = objFSO.OpenTextFile(strNewFile, _
+    ForWriting, CreateIfNotExist, OpenAsASCII)
+
+' Output opening paragraph tag, using fixed width font.
+If (blnBorder = True) Then
+    objOutput.WriteLine "<p style=""font-family:Courier New,Courier;border:1px solid gray"">"
+Else
+    ' Output horizontal line.
+    objOutput.WriteLine "<hr />"
+    objOutput.WriteLine "<p style=""font-family:Courier New,Courier"">"
+End If
+
+' Read the code from the file.
+Do Until objInput.AtEndOfStream
+    strLine = objInput.ReadLine
+    ' Replace symbols.
+    strLine = Replace(strLine, "&", "&amp;")
+    strLine = Replace(strLine, "<", "&lt;")
+    strLine = Replace(strLine, ">", "&gt;")
+    strLine = Replace(strLine, """", "&quot;")
+    strLine = Replace(strLine, "'", "&#39;")
+    ' Replace any tab characters with four space characters.
+    strLine = Replace(strLine, vbTab, "&nbsp;&nbsp;&nbsp;&nbsp;")
+    ' Preserve all spacing.
+    strLine = Replace(strLine, "  ", "&nbsp;&nbsp;")
+    ' Preserve leading single space.
+    If (Left(strLine, 1) = " ") Then
+        strLine = "&nbsp;" & Mid(strLine, 2)
+    End If
+    ' Output the line with a trailing carriage return.
+    objOutput.WriteLine strLine & "<br />"
+Loop
+
+objInput.Close
+
+' Output closing paragraph tag.
+objOutput.WriteLine "</p>"
+
+' Add a <pre> tag to flag this as code in Microsoft forums.
+objOutput.WriteLine "<pre>-----</pre>"
+objOutput.WriteLine "<p><br /></p>"
+
+' Close output file.
+objOutput.Close
+
+' Alert user about the new file.
+Wscript.Echo "File " & strNewFile & " with HTML created in the current folder"

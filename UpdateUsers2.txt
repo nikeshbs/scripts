@@ -1,0 +1,1475 @@
+' UpdateUsers2.vbs
+' VBScript program to update users in bulk according to the information
+' in a Microsoft Excel spreadsheet.
+' The first row of the spreadsheet specifies the LDAP display names of
+' attributes. One of the attributes must be either distinguishedName or
+' sAMAccountName to uniquely identify the users.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2009 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - May 29, 2009 - Supports single-valued string attributes.
+' Version 2.0 - June 4, 2009
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim objExcel, strExcelPath, objSheet
+Dim intRow, intCol
+Dim objUser, strUserDN, strGroupDN
+Dim strNetBIOSDomain, strDNSDomain
+Dim objRootDSE, objTrans, strSchema
+Dim arrAttributes(), strAttribute, strValue
+Dim strSyntax, intMax, intID
+Dim blnFound, blnChanged, objParent, intRename
+Dim blnReturn, lngFlag, strPrefix
+Dim objGroupList, strOldValue, dtmExpire
+Dim objMaskLisk, lngValue, blnOldValue
+Dim objSyntaxList, arrValues, objDate
+Dim strLogFile, objFSO, objLog, intErrors
+Dim intUpdated, intRenamed, intUnchanged
+
+' Constants to modify multi-valued AD attributes.
+Const ADS_PROPERTY_CLEAR = 1
+Const ADS_PROPERTY_UPDATE = 2
+Const ADS_PROPERTY_APPEND = 3
+Const ADS_PROPERTY_DELETE = 4
+' Constants for the NameTranslate object.
+Const ADS_NAME_INITTYPE_GC = 3
+Const ADS_NAME_TYPE_NT4 = 3
+Const ADS_NAME_TYPE_1779 = 1
+' Supported bit masks for userAccountControl.
+Const ADS_UF_ACCOUNTDISABLE = &H02
+Const ADS_UF_PASSWD_NOTREQD = &H20
+Const ADS_UF_DONT_EXPIRE_PASSWD = &H10000
+Const ADS_UF_SMARTCARD_REQUIRED = &H40000
+' Constants for log file.
+Const ForAppending = 8
+Const OpenAsASCII = 0
+Const CreateIfNotExist = True
+
+' Specify spreadsheet.
+strExcelPath = "c:\Scripts\UpdateUsers.xls"
+
+' Specify log file.
+strLogFile = "c:\Scripts\UpdateUsers.log"
+
+' Open the log file for appending.
+Set objFSO = CreateObject("Scripting.FileSystemObject")
+Set objLog = objFSO.OpenTextFile(strLogFile, _
+    ForAppending, CreateIfNotExist, OpenAsASCII)
+' Write to the log file.
+objLog.WriteLine "--------------------------------------------"
+objLog.WriteLine "UpdateUsers.vbs Version 2.0 (June 2, 2009)"
+objLog.WriteLine "Started: " & CStr(Now())
+objLog.WriteLine "Spreadsheet: " & strExcelPath
+objLog.WriteLine "Log file: " & strLogFile
+
+' Setup dictionary object of supported bit mask constants.
+Set objMaskLisk = CreateObject("Scripting.Dictionary")
+objMaskLisk.CompareMode = vbTextCompare
+objMaskLisk("ADS_UF_ACCOUNTDISABLE") = ADS_UF_ACCOUNTDISABLE
+objMaskLisk("ADS_UF_PASSWD_NOTREQD") = ADS_UF_PASSWD_NOTREQD
+objMaskLisk("ADS_UF_DONT_EXPIRE_PASSWD") = ADS_UF_DONT_EXPIRE_PASSWD
+objMaskLisk("ADS_UF_SMARTCARD_REQUIRED") = ADS_UF_SMARTCARD_REQUIRED
+
+' Setup dictionary object of attribute syntaxes.
+' The LDAP display names will be read from the spreadsheet.
+' The corresponding syntaxes will be read from the Schema container.
+Set objSyntaxList = CreateObject("Scripting.Dictionary")
+objSyntaxList.CompareMode = vbTextCompare
+
+' Setup dictionary object for group names and object references.
+' This allows us to bind to each group just once and reuse the
+' object reference.
+Set objGroupList = CreateObject("Scripting.Dictionary")
+objGroupList.CompareMode = vbTextCompare
+
+' Determine DNS domain name from RootDSE object.
+On Error Resume Next
+Set objRootDSE = GetObject("LDAP://RootDSE")
+If (Err.Number <> 0) Then
+    On Error GoTo 0
+    objLog.WriteLine "## Domain not found"
+    objLog.WriteLine "Program aborted: " & CStr(Now())
+    objLog.Close
+    Wscript.Echo "Domain not found"
+    Wscript.Quit
+End If
+On Error GoTo 0
+
+strDNSDomain = objRootDSE.Get("DefaultNamingContext")
+' Retrieve DN of Schema container.
+strSchema = objRootDSE.Get("schemaNamingContext")
+
+' Use the NameTranslate object to find the NetBIOS domain name
+' from the DNS domain name.
+Set objTrans = CreateObject("NameTranslate")
+objTrans.Init ADS_NAME_INITTYPE_GC, ""
+objTrans.Set ADS_NAME_TYPE_1779, strDNSDomain
+strNetBIOSDomain = objTrans.Get(ADS_NAME_TYPE_NT4)
+' Remove trailing backslash.
+strNetBIOSDomain = Left(strNetBIOSDomain, Len(strNetBIOSDomain) - 1)
+
+' Open the spreadsheet.
+On Error Resume Next
+Set objExcel = CreateObject("Excel.Application")
+If (Err.Number <> 0) Then
+    On Error GoTo 0
+    objLog.WriteLine "## Excel Application not found"
+    objLog.WriteLine "Program aborted: " & CStr(Now())
+    objLog.Close
+    Wscript.Echo "Excel Application not found"
+    Wscript.Quit
+End If
+objExcel.Workbooks.Open strExcelPath
+If (Err.Number <> 0) Then
+    On Error GoTo 0
+    objLog.WriteLine "## Unable to open spreadsheet " & strExcelPath
+    objLog.WriteLine "Program aborted: " & CStr(Now())
+    objLog.Close
+    objExcel.Application.Quit
+    Wscript.Echo "Unable to open spreadsheet " & strExcelPath
+    Wscript.Quit
+End If
+On Error GoTo 0
+
+' Select the first worksheet.
+Set objSheet = objExcel.ActiveWorkbook.Worksheets(1)
+
+' Read the attribute display names from the first row.
+' Read until the first blank column is found.
+intRow = 1
+intCol = 1
+intID = 0
+intRename = 0
+Do While (objSheet.Cells(intRow, intCol).Value <> "")
+    ' Attribute names are case insensitive.
+    strAttribute = LCase(Trim(objSheet.Cells(intRow, intCol).Value))
+    ' Save attribute LDAP display names in array.
+    ReDim Preserve arrAttributes(intCol - 1)
+    arrAttributes(intCol - 1) = strAttribute
+    ' Save unique attribute names in dictionary object
+    ' to track syntaxes. Syntaxes will be retrieved later.
+    If (objSyntaxList.Exists(strAttribute) = False) Then
+        objSyntaxList(strAttribute) = ""
+    End If
+    ' Keep track of which column uniquely identifies users.
+    If (strAttribute = "distinguishedname") Then
+        intID = intCol
+    End If
+    ' If distinguishedName identifies users, then sAMAccountName
+    ' can be modified.
+    If (strAttribute = "samaccountname") And (intID = 0) Then
+        intID = intCol
+    End If
+    ' Keep track if user objects can be renamed.
+    If (strAttribute = "cn") Then
+        intRename = intCol
+    End If
+    intCol = intCol + 1
+Loop
+
+If (intID = 0) Then
+    objLog.WriteLine "## No column found to identify users"
+    objLog.WriteLine "Program aborted: " & CStr(Now())
+    objLog.Close
+    objExcel.ActiveWorkbook.Close
+    objExcel.Application.Quit
+    Wscript.Echo "No column found to identify users"
+    Wscript.Quit
+End If
+
+' Keep track of the last column of the spreadsheet used.
+intMax = intCol - 1
+
+' Retrieve syntax of each attribute from the schema container
+' and save in dictionary object.
+Call GetSyntaxes
+
+' Check if any attributes are not found or syntaxes are not supported.
+blnFound = True
+For Each strAttribute In objSyntaxList.Keys
+    strSyntax = objSyntaxList(strAttribute)
+    If (strSyntax = "") Then
+        objLog.WriteLine "## Attribute " & strAttribute _
+            & " not found in schema"
+        Wscript.Echo "Attribute " & strAttribute _
+            & " not found in schema"
+        blnFound = False
+    End If
+    If (strSyntax = "NotSupported") Then
+        objLog.WriteLine "## Attribute " & strAttribute _
+            & " has a syntax that is not supported"
+        Wscript.Echo "Attribute " & strAttribute _
+            & " not supported"
+        blnFound = False
+    End If
+    If (strSyntax = "Constructed") Then
+        objLog.WriteLine "## Attribute " & strAttribute _
+            & " is operational, so is not supported"
+        Wscript.Echo "Attribute " & strAttribute _
+            & " not supported"
+         blnFound = False
+    End If
+Next
+If (blnFound = False) Then
+    objLog.WriteLine "Program aborted: " & CStr(Now())
+    objLog.Close
+    objExcel.ActiveWorkbook.Close
+    objExcel.Application.Quit
+    Wscript.Echo "Program aborted"
+    Wscript.Quit
+End If
+
+' Read remaining rows of the spreadsheet until the first blank value
+' is found in the column that identifies users.
+intRow = 2
+intErrors = 0
+intUpdated = 0
+intUnchanged = 0
+intRenamed = 0
+Do While (objSheet.Cells(intRow, intID).Value <> "")
+    ' Update a user. Read identifying column for this user.
+    strValue = Trim(objSheet.Cells(intRow, intID).Value)
+    Wscript.Echo "Processing: " & strValue
+    blnFound = False
+    If (arrAttributes(intID - 1) = "distinguishedname") Then
+        ' Bind to the user object.
+        ' ADSI requires that the forward slash character be escaped.
+        On Error Resume Next
+        Set objUser = GetObject("LDAP://" & Replace(strValue, "/", "\/"))
+        If (Err.Number = 0) Then
+            On Error GoTo 0
+            blnFound = True
+        Else
+            On Error GoTo 0
+            objLog.WriteLine "## User not found: " & strValue
+            intErrors = intErrors + 1
+        End If
+    End If
+    If (arrAttributes(intID - 1) = "samaccountname") Then
+        ' Convert sAMAccountName to distinguishedName.
+        ' Use Set method of NameTranslate object to specify
+        ' the NT format of the user name.
+        On Error Resume Next
+        objTrans.Set ADS_NAME_TYPE_NT4, strNetBIOSDomain _
+            & "\" & strValue
+        If (Err.Number = 0) Then
+            On Error GoTo 0
+            ' Use the Get method to retrieve the Distinguished Name.
+            strUserDN = objTrans.Get(ADS_NAME_TYPE_1779)
+            ' ADSI requires that the forward slash character be escaped.
+            strUserDN = Replace(strUserDN, "/", "\/")
+            ' Bind to the user object.
+            Set objUser = GetObject("LDAP://" & strUserDN)
+            blnFound = True
+        Else
+            On Error GoTo 0
+            objLog.WriteLine "## User not found: " _
+                & strNetBIOSDomain & "\" & strValue
+            intErrors = intErrors + 1
+        End If
+    End If
+    If (blnFound = True) Then
+        ' User found.
+        ' Read remaining values for this user.
+        blnChanged = False
+        For intCol = 1 To intMax
+            ' Skip the identifying column.
+            If (intCol <> intID) Then
+                ' Retrieve attribute name for this column
+                ' from array.
+                strAttribute = arrAttributes(intCol - 1)
+                ' Retrieve attribute syntax from dictionary object.
+                strSyntax = objSyntaxList(strAttribute)
+                ' Attribute values are case sensitive.
+                ' Leading and trialing blanks allowed.
+                strValue = objSheet.Cells(intRow, intCol).Value
+                ' Do nothing if the value is missing or blank.
+                If (Trim(strValue) <> "") Then
+                    ' Handle special attributes regardless
+                    ' of syntax.
+                    If (strAttribute = "cn") Then
+                        ' Skip Common Name for now. Rename later.
+                    ElseIf (strAttribute = "accountexpires") Then
+                        ' AccountExpirationDate property method can
+                         ' raise error if account does not expire.
+                        On Error Resume Next
+                        dtmExpire = objUser.AccountExpirationDate
+                        If (Err.Number <> 0) Then
+                            On Error GoTo 0
+                            ' accountExpires = 2^63 - 1, account
+                            ' does not expire.
+                            dtmExpire = 0
+                        End If
+                        On Error GoTo 0
+                        If (Trim(LCase(strValue)) = ".delete") _
+                                Or (Trim(strValue) = "0") Then
+                            ' If account does not expire,
+                            ' accountExpires either 0 or 2^63 - 1.
+                            Set objDate = objUser.accountExpires
+                            If ((objDate.HighPart <> 0) Or (objDate.LowPart <> 0)) _
+                                    And (dtmExpire <> 0) Then
+                                objUser.accountExpires = 0
+                                blnChanged = True
+                            End If
+                        Else
+                            If (IsDate(strValue) = True) Then
+                                If (dtmExpire <> CDate(strValue)) Then
+                                    objUser.AccountExpirationDate = _
+                                        CDate(strValue)
+                                    blnChanged = True
+                                End If
+                            Else
+                                objLog.WriteLine "## Invalid date: " _
+                                    & strValue & " for attribute: " _
+                                    & strAttribute & " for user " _
+                                    & objUser.distinguishedName
+                                intErrors = intErrors + 1
+                            End If
+                        End If
+                    ElseIf (strAttribute = "pwdlastset") Then
+                        ' Only 0 and ".delete" is allowed for pwdLastSet.
+                        If (Trim(LCase(strValue)) = ".delete") _
+                                Or (Trim(strValue) = "0") Then
+                            Set objDate = objUser.pwdLastSet
+                            If (objDate.HighPart <> 0) _
+                                    Or (objDate.LowPart <> 0) Then
+                                objUser.pwdLastSet = 0
+                                blnChanged = True
+                            End If
+                        Else
+                            objLog.WriteLine "## Invalid value for " _
+                                & "pwdLastSet: " _
+                                & strValue & " for user " _
+                                & objUser.distinguishedName
+                            intErrors = intErrors + 1
+                        End If
+                    ElseIf (strAttribute = "memberof") Then
+                        ' Group memberships.
+                        ' strValue is semicolon delimited list
+                        ' of group DN's or NetBIOS names.
+                        blnReturn = GroupMembership(strValue)
+                        ' No need to invoke SetInfo when group
+                        ' membership changed.
+                    ElseIf (strAttribute = "userworkstations") Then
+                        ' strValue is semicolon or comma delimited
+                        ' list of computer NetBIOS names.
+                        blnReturn = ModifyWorkstations(strValue, _
+                            objUser.userWorkstations & "")
+                        If (blnReturn = True) Then
+                            ' ModifyWorkstations returns strValue
+                            ' as new comma delimited list of names.
+                            If (strValue = "") Then
+                                ' Clear the attribute.
+                                objUser.PutEx ADS_PROPERTY_CLEAR, _
+                                    strAttribute, 0
+                            Else
+                                ' Update the attribute.
+                                objUser.userWorkstations = strValue
+                            End If
+                            blnChanged = True
+                        End If
+                    Else
+                        ' All other attributes are handled based
+                        ' on syntax.
+                        Select Case strSyntax
+                            Case "string"
+                                ' Single-value string attribute.
+                                ' Retrieve old attribute value.
+                                ' An error is raised if there is
+                                ' no value (the attribute is not set).
+                                On Error Resume Next
+                                strOldValue = objUser.Get(strAttribute)
+                                If (Err.Number <> 0) Then
+                                    On Error GoTo 0
+                                    strOldValue = ""
+                                End If
+                                On Error GoTo 0
+                                If (Trim(LCase(strValue)) = ".delete") Then
+                                    If (strOldValue <> "") Then
+                                        If (strAttribute = "samaccountname") Then
+                                            ' Mandatory attribute.
+                                            objLog.WriteLine "## Mandatory attribute " _
+                                                & "sAMAccountName cannot be cleared " _
+                                                & "for user: " & objUser.distinguishedName
+                                            intErrors = intErrors + 1
+                                        Else
+                                            ' Value should be cleared.
+                                            objUser.PutEx ADS_PROPERTY_CLEAR, _
+                                                strAttribute, 0
+                                            blnChanged = True
+                                        End If
+                                    End If
+                                ElseIf (strValue <> strOldValue) Then
+                                    ' Assign new value.
+                                    objUser.Put strAttribute, strValue
+                                    blnChanged = True
+                                End If
+                            Case "string()"
+                                ' Multi-valued string attribute.
+                                ' Retrieve old values. An error is
+                                ' raised if there are no values.
+                                On Error Resume Next
+                                arrValues = objUser.GetEx(strAttribute)
+                                If (Err.Number <> 0) Then
+                                    arrValues = Array()
+                                End If
+                                ' Check if any values modified.
+                                blnReturn = ModifyStrCollection(strAttribute, _
+                                    strValue, arrValues)
+                                If (blnReturn = True) Then
+                                    blnChanged = True
+                                End If
+                            Case "flag"
+                                ' Flag attribute, probably userAccountControl.
+                                ' The value read from the spreadsheet will
+                                ' be the bit mask. If the bit mask is
+                                ' prefixed with "+", the bit is to be set.
+                                ' If the prefix is "-", the bit is to be
+                                ' cleared. The default is "+".
+                                strPrefix = Left(strValue, 1)
+                                If (strPrefix = "+") Or (strPrefix = "-") Then
+                                    If (Len(strValue) > 1) Then
+                                        strValue = Mid(strValue, 2)
+                                    End If
+                                Else
+                                    strPrefix = "+"
+                                End If
+                                lngFlag = objUser.Get(strAttribute)
+                                If (objMaskLisk.Exists(strValue) = True) Then
+                                    ' Supported bit mask recognized.
+                                    lngValue = objMaskLisk(strValue)
+                                ElseIf (IsNumeric(strValue) = True) Then
+                                    lngValue = Clng(strValue)
+                                    If (lngValue <> CDbl(strValue)) Then
+                                        objLog.WriteLine "## Invalid flag value: " _
+                                            & strValue & " for attribute: " _
+                                            & strAttribute & " for user: " _
+                                            & objUser.distinguishedName
+                                        intErrors = intErrors + 1
+                                        strValue = ""
+                                    End If
+                                Else
+                                    objLog.WriteLine "## Invalid flag value: " _
+                                        & strValue & " for attribute: " _
+                                        & strAttribute & " for user: " _
+                                        & objUser.distinguishedName
+                                    intErrors = intErrors + 1
+                                    strValue = ""
+                                End If
+                                If (strValue <> "") Then
+                                    If (strPrefix = "+") Then
+                                        ' Make sure the bit is set.
+                                        If ((lngFlag And lngValue) = 0) Then
+                                            lngFlag = lngFlag Or lngValue
+                                            objUser.Put strAttribute, lngFlag
+                                            blnChanged = True
+                                        End If
+                                    End If
+                                    If (strPrefix = "-") Then
+                                        ' Make sure the bit is cleared.
+                                        If ((lngFlag And lngValue) <> 0) Then
+                                            lngFlag = lngFlag Xor lngValue
+                                            objUser.Put strAttribute, lngFlag
+                                            blnChanged = True
+                                        End If
+                                    End If
+                                End If
+                            Case "dn"
+                                ' Single-Valued Distinguished Name
+                                ' attribute.
+                                ' Retrieve old attribute value. An
+                                ' error is raised if there is no value.
+                                On Error Resume Next
+                                strOldValue = objUser.Get(strAttribute)
+                                If (Err.Number <> 0) Then
+                                    On Error GoTo 0
+                                    strOldValue = ""
+                                End If
+                                On Error GoTo 0
+                                If (Trim(LCase(strValue)) = ".delete") Then
+                                    If (strOldValue <> "") Then
+                                        objUser.PutEx ADS_PROPERTY_CLEAR, _
+                                            strAttribute, 0
+                                    End If
+                                Else
+                                    ' Validate value.
+                                    ' ADSI requires that forward slashes
+                                    ' be escaped.
+                                    On Error Resume Next
+                                    objTrans.Set ADS_NAME_TYPE_1779, _
+                                        Replace(Trim(strValue), "/", "\/")
+                                    If (Err.Number = 0) Then
+                                        On Error GoTo 0
+                                        ' Value is a valid
+                                        ' Distinguished Name.
+                                        If (LCase(strOldValue) <> Trim(LCase(strValue))) Then
+                                            ' Assign Distinguished Name.
+                                            ' ADSI requires that forward slashes
+                                            ' be escaped.
+                                            objUser.Put strAttribute, _
+                                                Replace(Trim(strValue), "/", "\/")
+                                            blnChanged = True
+                                        End If
+                                    Else
+                                        On Error GoTo 0
+                                        ' Check if value is a sAMAccountName.
+                                        On Error Resume Next
+                                        objTrans.Set ADS_NAME_TYPE_NT4, _
+                                            strNetBIOSDomain & "\" & Trim(strValue)
+                                        If (Err.Number = 0) Then
+                                            On Error GoTo 0
+                                            ' Value is a valid sAMAccountName.
+                                            ' Retrieve DN.
+                                            strUserDN = objTrans.Get(ADS_NAME_TYPE_1779)
+                                            If (LCase(strOldValue) <> LCase(strUserDN)) Then
+                                                ' Assign Distinguished Name.
+                                                ' ADSI requires that forward slashes
+                                                ' be escaped.
+                                                objUser.Put strAttribute, _
+                                                    Replace(strUserDN, "/", "\/")
+                                                blnChanged = True
+                                            End If
+                                        Else
+                                            On Error GoTo 0
+                                            objLog.WriteLine "## Invalid DN: " _
+                                                & strValue & " for attribute: " _
+                                                & strAttribute & " for user: " _
+                                                & objUser.distinguishedName
+                                            intErrors = intErrors + 1
+                                        End If
+                                    End If
+                                End If
+                            Case "dn()"
+                                ' Multi-Valued Distinguished Name attribute.
+                                ' Retrieve old values. An error is raised if
+                                ' there are no values.
+                                On Error Resume Next
+                                arrValues = objUser.GetEx(strAttribute)
+                                If (Err.Number <> 0) Then
+                                    On Error GoTo 0
+                                    arrValues = Array()
+                                End If
+                                On Error GoTo 0
+                                ' Check if any values modified.
+                                blnReturn = ModifyDNCollection(strAttribute, _
+                                    strValue, arrValues)
+                                If (blnReturn = True) Then
+                                    blnChanged = True
+                                End If
+                            Case "boolean"
+                                ' Boolean attributes can be True or False.
+                                ' Retrieve old attribute value. An error
+                                ' is raised if there is no value.
+                                On Error Resume Next
+                                blnOldValue = objUser.Get(strAttribute)
+                                If (Err.Number <> 0) Then
+                                    On Error GoTo 0
+                                    blnOldValue = ""
+                                End If
+                                On Error GoTo 0
+                                Select Case Trim(LCase(strValue))
+                                    Case "true", "t", "-1", "- 1"
+                                        If (blnOldValue <> True) Then
+                                            objUser.Put strAttribute, True
+                                            blnChanged = True
+                                        End If
+                                    Case "false", "f", "0"
+                                        If (blnOldValue <> False) Then
+                                            objUser.Put strAttribute, False
+                                            blnChanged = True
+                                        End If
+                                    Case ".delete"
+                                        If (blnOldValue <> "") Then
+                                            objUser.PutEx ADS_PROPERTY_CLEAR, _
+                                                strAttribute, 0
+                                            blnChanged = True
+                                        End If
+                                    Case Else
+                                        objLog.WriteLine "## Invalid Boolean: " _
+                                            & strValue & " for attribute: " _
+                                            & strAttribute & " for user: " _
+                                            & objUser.distinguishedName
+                                        intErrors = intErrors + 1
+                                End Select
+                            Case "number"
+                                ' Enumeration, an integer.
+                                ' Retrieve old attribute value. An error
+                                ' is raised if there is no value.
+                                On Error Resume Next
+                                strOldValue = objUser.Get(strAttribute)
+                                If (Err.Number <> 0) Then
+                                    On Error GoTo 0
+                                    strOldValue = ""
+                                End If
+                                On Error GoTo 0
+                                If (Trim(LCase(strValue)) = ".delete") Then
+                                    If (strOldValue <> "") Then
+                                        objUser.PutEx ADS_PROPERTY_CLEAR, _
+                                            strAttribute, 0
+                                        blnChanged = True
+                                    End If
+                                ElseIf (Trim(strValue) <> strOldValue) Then
+                                    ' Convert value to integer.
+                                    If (IsNumeric(strValue) = True) Then
+                                        If (strValue = CDbl(strValue)) Then
+                                            objUser.Put strAttribute, CLng(strValue)
+                                            blnChanged = True
+                                        Else
+                                            objLog.WriteLine "## Invalid numeric value: " _
+                                                & strValue & " for attribute: " _
+                                                & strAttribute & " for user: " _
+                                                & objUser.distinguishedName
+                                            intErrors = intErrors + 1
+                                        End If
+                                    Else
+                                        objLog.WriteLine "## Invalid numeric value: " _
+                                            & strValue & " for attribute: " _
+                                            & strAttribute & " for user: " _
+                                            & objUser.distinguishedName
+                                        intErrors = intErrors + 1
+                                    End If
+                                End If
+                            Case Else
+                                ' Syntax not recognized.
+                                ' Unexpected error.
+                                objLog.WriteLine "## Unexpected syntax: " & strSyntax _
+                                    & " for attribute: " & strAttribute _
+                                    & " for user: " & objUser.distinguishedName
+                                intErrors = intErrors + 1
+                        End Select
+                    End If    ' All possible attributes considered.
+                End If    ' strValue not blank.
+            End If    ' Not an ID column.
+        Next    ' Enumerate columns.
+        If (blnChanged = True) Then
+            ' Save changes to AD.
+            On Error Resume Next
+            objUser.SetInfo
+            If (Err.Number <> 0) Then
+                On Error GoTo 0
+                objLog.WriteLine "## Unable to update user " _
+                    & Trim(objSheet.Cells(intRow, intID).Value)
+                intErrors = intErrors + 1
+            Else
+                On Error GoTo 0
+                objLog.WriteLine "Updated user: " _
+                    & objUser.distinguishedName
+                intUpdated = intUpdated + 1
+            End If
+        Else
+            objLog.WriteLine "User unchanged (unless renamed or group membership changed): " _
+                & objUser.distinguishedName
+            intUnchanged = intUnchanged + 1
+        End If
+        If (intRename > 0) Then
+            ' Object to be renamed, retrieve new Common Name.
+            ' We retain the case of the value. We also do not
+            ' trim leading or trailing blanks. It is up to the user
+            ' to properly escape characters.
+            strValue = objSheet.Cells(intRow, intRename).Value
+            ' Check if different from existing Common Name.
+            ' Comparison is case sensitive.
+            If (strValue <> objUser.cn) Then
+                If (strValue <> "") And (strValue <> ".delete") Then
+                    ' Rename object.
+                    Set objParent = GetObject(objUser.Parent)
+                    On Error Resume Next
+                    objParent.MoveHere objUser.AdsPath, "cn=" & strValue
+                    If (Err.Number <> 0) Then
+                        On Error GoTo 0
+                        objLog.WriteLine "## Unable to rename user " _
+                            & objSheet.Cells(intRow, intID).Value
+                        intErrors = intErrors + 1
+                    Else
+                        On Error GoTo 0
+                        objLog.WriteLine "Renamed user " _
+                            & objUser.distinguishedName
+                        intRenamed = intRenamed + 1
+                    End If
+                ElseIf (strValue = ".delete") Then
+                    objLog.WriteLine "## The cn attribute is mandatory " _
+                        & "and cannot be cleared, for user " _
+                        & objUser.distinguishedName
+                    intErrors = intErrors + 1
+                End If
+            End If
+        End If    ' Rename user.
+    End If    ' User found.
+    intRow = intRow + 1
+Loop
+
+Wscript.Echo "Done"
+Wscript.Echo "Number of errors: " & CStr(intErrors)
+Wscript.Echo "See log file: " & strLogFile
+objLog.WriteLine "Finished: " & CStr(Now())
+objLog.WriteLine "Number of users updated: " & CStr(intUpdated)
+objLog.WriteLine "Number of users unchanged: " & CStr(intUnchanged)
+objLog.WriteLine "Number of users renamed: " & CStr(intRenamed)
+objLog.WriteLine "Number of errors: " & CStr(intErrors)
+
+' Clean up.
+objLog.Close
+objExcel.ActiveWorkbook.Close
+objExcel.Application.Quit
+
+Function ModifyStrCollection(ByVal strCollection, ByVal strNewValues, _
+        ByVal arrOldValues)
+    ' Function to modify multi-valued string attributes of AD objects.
+    ' Returns True if any changes made that need to be saved,
+    ' False otherwise.
+    ' strCollection is the LDAP display name of the multi-valued
+    ' attribute.
+    ' strNewValues is a semicolon delimited list of values to be added,
+    ' removed, or used to replace the existing value.
+    ' arrOldValues is the array of existing values.
+    ' objUser must be declared in the main program and have global scope.
+
+    Dim arrNewValues, strAdd, strSub, blnMod, k, j
+    Dim strLead, strEntry, arrSub, arrAdd, strItem
+    Dim blnFound
+
+    ModifyStrCollection = False
+    If (Trim(strNewValues) = "") Then
+        ' Do nothing if no values read from spreadsheet.
+        Exit Function
+    End If
+
+    If (Trim(LCase(strNewValues)) = ".delete") Then
+        If (UBound(arrOldValues) <> -1) Then
+            ' Clear the attribute if it has any values.
+            objUser.PutEx ADS_PROPERTY_CLEAR, strCollection, 0
+            ModifyStrCollection = True
+        End If
+        Exit Function
+    End If
+
+    ' Replace escaped semicolons with Chr(164).
+    strNewValues = Replace(strNewValues, "\;", Chr(164))
+    arrNewValues = Split(strNewValues, ";")
+    strAdd = ""
+    strSub = ""
+    blnMod = False
+
+    ' Separate values read from spreadsheet into a list of
+    ' values to be added and another list of values to be removed.
+    For k = 0 To UBound(arrNewValues)
+        strLead = Left(arrNewValues(k), 1)
+        ' Leading and trailing spaces allowed.
+        strEntry = arrNewValues(k)
+        If (strLead = "+") Or (strLead = "-") Then
+           If (Len(strEntry) > 1) Then
+                strEntry = Mid(strEntry, 2)
+                ' We are in update mode.
+                blnMod = True
+            Else
+                strEntry = ""
+            End If
+        Else
+            strLead = "+"
+        End If
+        If (strEntry <> "") Then
+            If (strLead = "-") Then
+                For Each strItem In arrOldValues
+                    ' String values can have embedded semicolons.
+                    ' Are values case sensitive ???
+                    If (LCase(strItem) _
+                            = LCase(Replace(strEntry, Chr(164), ";"))) Then
+                        If (strSub = "") Then
+                            strSub = strEntry
+                        Else
+                            strSub = strSub & ";" & strEntry
+                        End If
+                        Exit For
+                    End If
+                Next
+            ElseIf (strLead = "+") Then
+                ' Only add the item if it does not exist in array.
+                blnFound = False
+                For Each strItem In arrOldValues
+                    ' String values can have embedded semicolons.
+                    ' Are values case sensitive ???
+                    If (LCase(strItem) _
+                            = LCase(Replace(strEntry, Chr(164), ";"))) Then
+                        blnFound = True
+                        Exit For
+                    End If
+                Next
+                If (blnFound = False) Then
+                    If (strAdd = "") Then
+                        strAdd = strEntry
+                    Else
+                        strAdd = strAdd & ";" & strEntry
+                    End If
+                End If
+            End If
+        End If
+    Next
+
+    If (blnMod = True) Then
+        ' We are in update mode.
+        If (strSub <> "") Then
+            arrSub = Split(strSub, ";")
+            ' String values can have embedded semicolons, which
+            ' do not need to be escaped.
+            For k = 0 To UBound(arrSub)
+                arrSub(k) = Replace(arrSub(k), Chr(164), ";")
+            Next
+            On Error Resume Next
+            objUser.PutEx ADS_PROPERTY_DELETE, strCollection, arrSub
+            If (Err.Number = 0) Then
+                If (strAdd <> "") Then
+                    ' Save the deletions before making additions.
+                    objUser.SetInfo
+                    If (Err.Number <> 0) Then
+                        On Error GoTo 0
+                        objLog.WriteLine "## Unable to update user " _
+                            & Trim(objSheet.Cells(intRow, intID).Value)
+                        intErrors = intErrors + 1
+                    Else
+                        On Error GoTo 0
+                        objUser.GetInfo
+                    End If
+                Else
+                    On Error GoTo 0
+                    ModifyStrCollection = True
+                End if
+            End If
+            On Error GoTo 0
+        End If
+        If (strAdd <> "") then
+            arrAdd = Split(strAdd, ";")
+            ' String values can have embedded semicolons, which
+            ' do not need to be escaped.
+            For k = 0 To UBound(arrAdd)
+                arrAdd(k) = Replace(arrAdd(k), Chr(164), ";")
+            Next
+            objUser.PutEx ADS_PROPERTY_APPEND, strCollection, arrAdd
+            ModifyStrCollection = True
+        End If
+    Else
+        ' We are in overwrite mode.
+        If (strAdd <> "") Then
+            arrAdd = Split(strAdd, ";")
+            ' String values can have embedded semicolons, which
+            ' do not need to be escaped.
+            For k = 0 To UBound(arrAdd)
+                arrAdd(k) = Replace(arrAdd(k), Chr(164), ";")
+            Next
+            ' Check if new list is different from the old.
+            If (UBound(arrAdd) <> UBound(arrOldValues)) Then
+                ' Arrays are of different sizes.
+                objUser.PutEx ADS_PROPERTY_UPDATE, strCollection, arrAdd
+                ModifyStrCollection = True
+                Exit Function
+            End If
+            ' Enumerate values read from spreadsheet.
+            For k = 0 To UBound(arrAdd)
+                ' Enumerate values read from AD.
+                blnFound = False
+                For j = 0 To UBound(arrOldValues)
+                    ' Are values case sensitive ???
+                    If (LCase(arrAdd(k)) = LCase(arrOldValues(j))) Then
+                        blnFound = True
+                        Exit For
+                    End If
+                Next
+                If (blnFound = False) Then
+                    ' At least one value differs.
+                    objUser.PutEx ADS_PROPERTY_UPDATE, strCollection, arrAdd
+                    ModifyStrCollection = True
+                    Exit Function
+                End If
+            Next
+        End If
+    End If
+
+End Function
+
+Function GroupMembership(ByVal strGroups)
+    ' Function to manage group memberships.
+    ' strGroups is the semicolon delimited list of group names read
+    ' from the spreadsheet. The names can be DN's or NetBIOS names.
+    ' Returns True if any changes, False otherwise. The following
+    ' variables must be declared in the main program and have
+    ' global scope:
+    ' objTrans, strNetBIOSDomain, objGroupList, objUser, objLog
+    ' There is only an update mode. There is no overwrite mode.
+
+    Dim arrGroups, strGroup, strPrefix, blnFound
+
+    GroupMembership = False
+    If (Trim(strGroups) = "") Then
+        ' Do nothing if no values read from spreadsheet.
+        Exit Function
+    End If
+    If (LCase(Trim(strGroups)) = ".delete") Then
+        ' Not allowed to remove all group membrships.
+        objLog.WriteLine "## Not permitted to remove " _
+            & "all group memberships for user " _
+            & objUser.distinguishedName
+        intErrors = intErrors + 1
+        Exit Function
+    End If
+
+    ' Replace escaped semicolons with Chr(164).
+    strGroups = Replace(strGroups, "\;", Chr(164))
+    arrGroups = Split(strGroups, ";")
+    For Each strGroup In arrGroups
+        strPrefix = Left(strGroup, 1)
+        If (strPrefix = "+") Or (strPrefix = "-") Then
+            If (Len(strGroup) > 1) Then
+                strGroup = Mid(strGroup, 2)
+            Else
+                strGroup = ""
+            End If
+        Else
+            strPrefix = "+"
+        End If
+        If (Trim(strGroup) <> "") Then
+            ' Check if group in dictionary object.
+            blnFound = False
+            If (objGroupList.Exists(strGroup) = False) Then
+                ' Attempt to bind to group.
+                ' Embedded semicolons must be escaped in DN values.
+                ' ADSI requires that forward slashes be escaped.
+                On Error Resume Next
+                Set objGroupList(Replace(strGroup, "/", "\/")) = GetObject("LDAP://" _
+                    & Replace(Replace(Trim(strGroup), Chr(164), "\;"), "/", "\/"))
+                If (Err.Number <> 0) Then
+                    Err.Clear
+                    ' Attempt to convert NetBIOS name into DN.
+                    ' Semicolons not allowed in sAMAccountNames.
+                    objTrans.Set ADS_NAME_TYPE_NT4, strNetBIOSDomain _
+                        & "\" & Replace(Trim(strGroup), Chr(164), ";")
+                    If (Err.Number <> 0) Then
+                        On Error GoTo 0
+                        objLog.WriteLine "## Group not found: " _
+                            & Replace(strGroup, Chr(164), "\;") _
+                            & ", for user " & objUser.distinguishedName
+                        intErrors = intErrors + 1
+                    Else
+                        On Error GoTo 0
+                        strGroupDN = objTrans.Get(ADS_NAME_TYPE_1779)
+                        ' ADSI requires that forward slashes be escaped.
+                        strGroupDN = Replace(strGroupDN, "/", "\/")
+                        ' Add group NetBIOS name to dictionary object.
+                        Set objGroupList(Trim(strGroup)) = GetObject("LDAP://" _
+                            & strGroupDN)
+                        ' Also add group DN to dictionary object.
+                        Set objGroupList(strGroupDN) = GetObject("LDAP://" _
+                            & strGroupDN)
+                        blnFound = True
+                    End If
+                Else
+                    On Error GoTo 0
+                    ' strGroup is a Distinguished Name.
+                    ' DN has been added to dictionary object.
+                    blnFound = True
+                End If
+            Else
+                ' Group name found in dictionary object.
+                blnFound = True
+            End If
+            If (blnFound = True) Then
+                If (strPrefix = "+") Then
+                    If (objGroupList(Trim(strGroup)).IsMember(objUser.AdsPath) = False) Then
+                        objGroupList(Trim(strGroup)).Add(objUser.AdsPath)
+                        objLog.WriteLine "User: " & objUser.distinguishedName _
+                            & " added to group: " _
+                            & objGroupList(Trim(strGroup)).sAMAccountName
+                        GroupMembership = True
+                    End If
+                End If
+                If (strPrefix = "-") Then
+                    If (objGroupList(Trim(strGroup)).IsMember(objUser.AdsPath) = True) Then
+                        objGroupList(Trim(strGroup)).Remove(objUser.AdsPath)
+                        objLog.WriteLine "User: " & objUser.distinguishedName _
+                            & " removed from group: " _
+                            & objGroupList(Trim(strGroup)).sAMAccountName
+                        GroupMembership = True
+                    End If
+                End If
+            End If
+        End If
+    Next
+
+End Function
+
+Function ModifyWorkstations(ByRef colstrWorkstations, _
+        ByVal strWSColl)
+    ' Function to modify the userWorkstations attribute of an
+    ' Active Directory user object according to the values in a semicolon
+    ' delimited string.
+    ' colstrWorkstations is the comma or semicolon delimited list of
+    ' NetBIOS names to be added and deleted, supplied by the user.
+    ' strWSColl is the old value of the userWorkstations attribute
+    ' retrieved from AD.
+    ' This function will return a modified colstrWorkstations, except
+    ' that the values will be comma delimited.
+    ' The function returns True if changes made, False otherwise.
+
+    Dim strLead, strEntry, blnMod, k
+    Dim strAdd, strSub, j
+    Dim arrstrModArray, arrstrAddArray, arrstrSubArray
+    Dim arrstrWSArray, blnFound
+
+    ModifyWorkstations = False
+    If (Trim(colstrWorkstations) = "") Then
+        ' Do nothing if no values read from spreadsheet.
+        Exit Function
+    End If
+
+    If (Trim(LCase(colstrWorkstations)) = ".delete") Then
+       If (strWSColl <> "") Then
+           ' Clear the attribute if it has any values.
+           colstrWorkstations = ""
+           ModifyWorkstations = True
+       End If
+       Exit Function
+    End If
+
+    strAdd = ""
+    strSub = ""
+    blnMod = False
+
+    ' Determine if colstrWorkstations is comma or semicolon delimited.
+    If (InStr(colstrWorkstations, ",") > 0) Then
+        ' Convert comma delimited values supplied by the user into array.
+        arrstrModArray = Split(colstrWorkstations, ",")
+    Else
+        ' Convert semicolon delimited values supplied by the user
+        ' into array.
+        arrstrModArray = Split(colstrWorkstations, ";")
+    End If
+
+    ' Separate array of names into one comma delimited string
+    ' of names to be added and another of names to be removed.
+    For k = 0 To UBound(arrstrModArray)
+        strLead = Left(arrstrModArray(k), 1)
+        ' Leading and trailing spaces allowed.
+        strEntry = arrstrModArray(k)
+        If (strLead = "+") Or (strLead = "-") Then
+            If (Len(strEntry) > 1) Then
+                strEntry = Mid(strEntry, 2)
+                ' We are in update mode.
+                blnMod = True
+            Else
+                strEntry = ""
+            End If
+        Else
+            ' Default is to add the entry.
+            strLead = "+"
+        End If
+        ' Skip blank values.
+        If (Trim(strEntry) <> "") Then
+            If (strLead = "+") Then
+                If (strAdd = "") Then
+                    strAdd = strEntry
+                Else
+                    strAdd = strAdd & "," & strEntry
+                End If
+            ElseIf (strLead = "-") Then
+                If (strSub = "") Then
+                    strSub = strEntry
+                Else
+                    strSub = strSub & "," & strEntry
+                End If
+            End If
+        End If
+    Next
+
+    If (blnMod = True) And (strWSColl <> "") Then
+        ' We are in update mode and there are old names to be updated.
+        ' Convert the old list of names into an array.
+        arrstrWSArray = Split(strWSColl, ",")
+        If (strSub <> "") Then
+            ' First remove any designated names.
+            arrstrSubArray = Split(strSub, ",")
+            For k = 0 To UBound(arrstrWSArray)
+                For j = 0 To UBound(arrstrSubArray)
+                    ' Only remove the name if it is in the array.
+                    If (Trim(LCase(arrstrWSArray(k))) = _
+                            Trim(LCase(arrstrSubArray(j)))) Then
+                        ' Remove the name from array of names retrieved
+                        ' from AD.
+                        arrstrWSArray(k) = ""
+                        ModifyWorkstations = True
+                    End If
+                Next
+            Next
+        Else
+            arrstrSubArray = Array()
+        End If
+        If (strAdd <> "") Then
+            ' Add any designated names.
+            arrstrAddArray = Split(strAdd, ",")
+            For k = 0 To UBound(arrstrWSArray)
+                For j = 0 To UBound(arrstrAddArray)
+                    ' Don't add the name if it is aleady in the array.
+                    If (Trim(LCase(arrstrWSArray(k))) = _
+                            Trim(LCase(arrstrAddArray(j)))) Then
+                        ' Remove duplicate.
+                        arrstrAddArray(j) = ""
+                        ModifyWorkstations = True
+                    End If
+                Next
+            Next
+        Else
+            arrstrAddArray = Array()
+        End If
+        ' New string composed of the old with designated names removed.
+        colstrWorkstations = Join(arrstrWSArray, ",")
+        ' String of names to be added, with duplicates removed.
+        strAdd = Join(arrstrAddArray, ",")
+        If (colstrWorkstations <> "") Then
+            If (strAdd <> "") Then
+                colstrWorkstations = colstrWorkstations & "," & strAdd
+            End If
+        ElseIf (strAdd <> "") Then
+            colstrWorkstations = strAdd
+        End If
+    Else
+        ' We are in overwrite mode or there are no old names to be updated.
+        colstrWorkstations = strAdd
+        If (strWSColl = "") Then
+            ModifyWorkstations = True
+        Else
+            ' We are in overwrite mode.
+            ' Check if new list different from old.
+            ' Convert the old list of names into an array.
+            arrstrWSArray = Split(strWSColl, ",")
+            If (UBound(arrstrModArray) <> UBound(arrstrWSArray)) Then
+                ' Arrays are of different sizes.
+                ModifyWorkstations = True
+                Exit Function
+            End If
+            ' Enumerate names read from spreadsheet.
+            For k = 0 To UBound(arrstrModArray)
+                ' Enumerate names read from AD attribute.
+                blnFound = False
+                For j = 0 To UBound(arrstrWSArray)
+                    If (LCase(arrstrModArray(k)) = _
+                            LCase(arrstrWSArray(j))) Then
+                        blnFound = True
+                        Exit For
+                    End If
+                Next
+                If (blnFound = False) Then
+                    ' At least one of the entries differs.
+                    ModifyWorkstations = True
+                    Exit Function
+                End If
+            Next
+        End If
+    End If
+End Function
+
+Sub GetSyntaxes()
+    ' Subroutine to retrieve syntax of each AD attribute in a dictionary
+    ' object. objSyntaxList must be declared in the main program and have
+    ' global scope. Key value in objSyntaxList is the LDAP display name
+    ' of the attribute. The item value will be blank if the attribute is
+    ' not found in the schema, will be "Constructed" if the attribute is
+    ' operational, will be the name of the syntax if the syntax is
+    ' supported by this program, or will be "NotSupported" if the attribute
+    ' is recognized but the syntax is not supported.
+
+    Dim adoConnection, adoCommand, adoRecordset
+    Dim strFilter, strQuery, intSysFlags, strSyntaxNum, strSingleValued
+    Dim strAttribute, strAttrs, strBase
+    Dim strSyntax, strName
+
+    ' Constant for constructed AD attribute.
+    Const ADS_SYSTEMFLAG_ATTR_IS_CONSTRUCTED = &H4
+
+    ' Setup ADO objects to search for AD attributes.
+    Set adoConnection = CreateObject("ADODB.Connection")
+    Set adoCommand = CreateObject("ADODB.Command")
+    adoConnection.Provider = "ADsDSOOBject"
+    adoConnection.Open "Active Directory Provider"
+    Set adoCommand.ActiveConnection = adoConnection
+    adoCommand.Properties("Page Size") = 100
+    adoCommand.Properties("Timeout") = 30
+    adoCommand.Properties("Cache Results") = False
+
+    ' Search the schema container.
+    strBase = "<LDAP://" & strSchema & ">"
+
+    ' Comma delimited list of attribute values to retrieve.
+    strAttrs = "lDAPDisplayName,attributeSyntax,isSingleValued,systemFlags"
+
+    ' Construct the filter to query for all attributes in the array.
+    strFilter = ""
+    For Each strAttribute In objSyntaxList.Keys
+        If (strFilter = "") Then
+            strFilter = "(&(objectCategory=AttributeSchema)(|(lDAPDisplayName=" _
+                & strAttribute & ")"
+        Else
+            strFilter = strFilter & "(lDAPDisplayName=" _
+                & strAttribute & ")"
+        End If
+    Next
+    strFilter = strFilter & "))"
+
+    ' Query AD.
+    strQuery = strBase & ";" & strFilter & ";" & strAttrs & ";subtree"
+    adoCommand.CommandText = strQuery
+
+    ' Enumerate the resulting recordset.
+    Set adoRecordset = adoCommand.Execute
+    Do Until adoRecordset.EOF
+        ' Retrieve values for this attribute.
+        strName = adoRecordset.Fields("lDAPDisplayName").Value
+        intSysFlags = adoRecordset.Fields("systemFlags").Value
+        strSyntaxNum = adoRecordset.Fields("attributeSyntax").Value
+        strSingleValued = adoRecordset.Fields("isSingleValued").Value
+        Select Case strSyntaxNum
+            Case "2.5.5.1"
+                strSyntax = "dn"
+            Case "2.5.5.8"
+                strSyntax = "boolean"
+            Case "2.5.5.9"
+                If (LCase(strName) = "useraccountcontrol") Then
+                    strSyntax = "flag"
+                Else
+                    strSyntax = "number"
+                End If
+            Case "2.5.5.12"
+                strSyntax = "string"
+            Case "2.5.5.16"
+                If (LCase(strName) = "accountexpires") _
+                        Or (LCase(strName) = "pwdlastset") Then
+                    strSyntax = "integer8"
+                Else
+                    strSyntax = "NotSupported"
+                End If
+            Case Else
+                strSyntax = "NotSupported"
+        End Select
+        If ((intSysFlags And ADS_SYSTEMFLAG_ATTR_IS_CONSTRUCTED) <> 0) Then
+            objSyntaxList(strName) = "Constructed"
+        Else
+            If (strSingleValued = "True") Then
+                objSyntaxList(strName) = strSyntax
+            ElseIf (strSyntax <> "NotSupported") Then
+                objSyntaxList(strName) = strSyntax & "()"
+            End If
+        End If
+        adoRecordset.MoveNext
+    Loop
+    adoRecordset.Close
+End Sub
+
+Function ModifyDNCollection(ByVal strCollection, ByVal strNewValues, _
+        ByVal arrOldValues)
+    ' Function to modify multi-valued DN attributes of AD objects.
+    ' Returns True if any changes made that need to be saved,
+    ' False otherwise.
+    ' strCollection is the LDAP display name of the multi-valued
+    ' attribute.
+    ' strNewValues is a semicolon delimited list of values to be added,
+    ' removed, or used to replace the existing value.
+    ' arrOldValues is the array of existing values.
+    ' The following must be declared in the main program and have
+    ' global scope: objUser, objTrans.
+
+    Dim arrNewValues, strAdd, strSub, blnMod, k
+    Dim strLead, strEntry, arrSub, arrAdd, strItem
+    Dim blnFound
+
+    ModifyDNCollection = False
+    If (Trim(strNewValues) = "") Then
+        ' Do nothing if no values read from spreadsheet.
+        Exit Function
+    End If
+
+    If (Trim(LCase(strNewValues)) = ".delete") Then
+        If (UBound(arrOldValues) <> -1) Then
+            ' Clear the attribute if it has any values.
+            objUser.PutEx ADS_PROPERTY_CLEAR, strCollection, 0
+            ModifyDNCollection = True
+        End If
+        Exit Function
+    End If
+
+    ' Replace escaped semicolons with Chr(164).
+    strNewValues = Replace(strNewValues, "\;", Chr(164))
+    arrNewValues = Split(strNewValues, ";")
+    strAdd = ""
+    strSub = ""
+    blnMod = False
+
+    ' Separate values read from spreadsheet into an list of
+    ' values to be added and another list of values to be removed.
+    For k = 0 To UBound(arrNewValues)
+        strLead = Left(arrNewValues(k), 1)
+        ' Leading and trailing not spaces allowed.
+        strEntry = Trim(arrNewValues(k))
+        If (strLead = "+") Or (strLead = "-") Then
+            If (Len(strEntry) > 1) Then
+                strEntry = Trim(Mid(strEntry, 2))
+                ' We are in update mode.
+                blnMod = True
+            Else
+                strEntry = ""
+            End If
+        Else
+            strLead = "+"
+        End If
+        If (strEntry <> "") Then
+            ' Validate value strEntry.
+            ' Embedded semicolons must be escaped in DN values.
+            ' ADSI requires that forward slashes be escaped.
+            On Error Resume Next
+            objTrans.Set ADS_NAME_TYPE_1779, _
+                Replace(Replace(strEntry, Chr(164), "\;"), "/", "\/")
+            If (Err.Number = 0) Then
+                On Error GoTo 0
+                ' Value is a valid Distinguished Name.
+            Else
+                On Error GoTo 0
+                ' Check if value is a sAMAccountName.
+                ' Embedded semicolons are not escaped in sAMAccountNames.
+                On Error Resume Next
+                objTrans.Set ADS_NAME_TYPE_NT4, strNetBIOSDomain _
+                    & "\" & Replace(strEntry, Chr(164), ";")
+                If (Err.Number = 0) Then
+                    On Error GoTo 0
+                    ' Value is a valid sAMAccountName.
+                    ' Retrieve DN.
+                    strEntry = objTrans.Get(ADS_NAME_TYPE_1779)
+                    ' ADSI requires the forward slash be escaped.
+                    strEntry = Replace(strEntry, "/", "\/")
+                Else
+                    On Error GoTo 0
+                    objLog.WriteLine "## Invalid DN:" _
+                        & Replace(strEntry, Chr(164), "\;") _
+                        & " for attribute: " _
+                        & strAttribute & " for user: " _
+                        & objUser.distinguishedName
+                    intErrors = intErrors + 1
+                    strEntry = ""
+                End If
+            End If
+            ' Skip invalid entries.
+            If (strEntry <> "") Then
+                If (strLead = "-") Then
+                    ' Only remove the item if it exists in array.
+                    For Each strItem In arrOldValues
+                        ' Embedded semicolons must be escaped in DN values.
+                        ' ADSI requires the forward slash be escaped.
+                        If (LCase(Replace(strItem, "/", "\/")) _
+                                = LCase(Replace(strEntry, Chr(164), "\;"))) Then
+                            If (strSub = "") Then
+                                strSub = strEntry
+                            Else
+                                strSub = strSub & ";" & strEntry
+                            End If
+                            Exit For
+                        End If
+                    Next
+                ElseIf (strLead = "+") Then
+                    ' Only add the item if it does not exist in array.
+                    blnFound = False
+                    For Each strItem In arrOldValues
+                        ' Embedded semicolons must be escaped in DN values.
+                        ' ADSI requires the forward slash be escaped.
+                        If (LCase(Replace(strItem, "/", "\/")) _
+                                = LCase(Replace(strEntry, Chr(164), "\;"))) Then
+                            blnFound = True
+                            Exit For
+                        End If
+                    Next
+                    If (blnFound = False) Then
+                        If (strAdd = "") Then
+                            strAdd = strEntry
+                        Else
+                            strAdd = strAdd & ";" & strEntry
+                        End If
+                    End If
+                End If
+            End If
+        End If
+    Next
+
+    If (blnMod = True) Then
+        ' We are in update mode.
+        If (strSub <> "") Then
+            arrSub = Split(strSub, ";")
+            For k = 0 To UBound(arrSub)
+                ' Embedded semicolons must be escaped in DN values.
+                arrSub(k) = Replace(arrSub(k), Chr(164), "\;")
+            Next
+            On Error Resume Next
+            objUser.PutEx ADS_PROPERTY_DELETE, strCollection, arrSub
+            If (Err.Number = 0) Then
+                If (strAdd <> "") Then
+                    ' Save the deletions before making additions.
+                    objUser.SetInfo
+                    If (Err.Number <> 0) Then
+                        On Error GoTo 0
+                        objLog.WriteLine "## Unable to update user " _
+                            & Trim(objSheet.Cells(intRow, intID).Value)
+                        intErrors = intErrors + 1
+                    Else
+                        On Error GoTo 0
+                        objUser.GetInfo
+                    End If
+                Else
+                    On Error GoTo 0
+                    ModifyDNCollection = True
+                End if
+            End If
+            On Error GoTo 0
+        End If
+        If (strAdd <> "") then
+            arrAdd = Split(strAdd, ";")
+            For k = 0 To UBound(arrAdd)
+                ' Embedded semicolons must be escaped in DN values.
+                arrAdd(k) = Replace(arrAdd(k), Chr(164), "\;")
+            Next
+            objUser.PutEx ADS_PROPERTY_APPEND, strCollection, arrAdd
+            ModifyDNCollection = True
+        End If
+    Else
+        ' We are in overwrite mode.
+        If (strAdd <> "") Then
+            arrAdd = Split(strAdd, ";")
+            For k = 0 To UBound(arrAdd)
+                ' Embedded semicolons must be escaped in DN values.
+                arrAdd(k) = Replace(arrAdd(k), Chr(164), "\;")
+            Next
+            ' Check if new values different from old.
+            If (UBound(arrAdd) <> UBound(arrOldValues)) Then
+                ' Arrays are of different sizes.
+                objUser.PutEx ADS_PROPERTY_UPDATE, strCollection, arrAdd
+                ModifyDNCollection = True
+                Exit Function
+            End If
+            ' Enumerate values read from spreadsheet.
+            For k = 0 To UBound(arrAdd)
+                ' Enumerate values read from AD.
+                blnFound = False
+                For j = 0 To UBound(arrOldValues)
+                    If (LCase(arrAdd(k)) = LCase(arrOldValues(j))) Then
+                        blnFound = True
+                        Exit For
+                    End If
+                Next
+                If (blnFound = False) Then
+                    objUser.PutEx ADS_PROPERTY_UPDATE, strCollection, arrAdd
+                    ModifyDNCollection = True
+                    Exit Function
+                End If
+            Next
+        End If
+    End If
+
+End Function

@@ -1,0 +1,147 @@
+' UniqueMemberships.vbs
+' VBScript program to find every unique combination of group
+' memberships among users in the domain. Reports the number of times
+' each unique combination is found.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2007-2010 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - January 2, 2007
+' Version 1.1 - November 6, 2010 - No need to set objects to Nothing.
+'
+' Program uses ADO to retrieve all users and their memberships. Uses
+' a function to sort the memberships of each user alphabetically and
+' convert into a semicolon delimited string. Unique combinations of
+' memberships are retained in a dictionary object.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim objRootDSE, strDNSDomain, objCommand, objConnection
+Dim strBase, strFilter, strAttributes, strQuery, objRecordSet
+Dim strNTName, colMemberOf
+Dim objMemberships, strMemberOf, intCount
+Dim strMembership
+
+' Use dictionary object to track unique group membership combinations.
+Set objMemberships = CreateObject("Scripting.Dictionary")
+objMemberships.CompareMode = vbTextCompare
+
+' Determine DNS domain name.
+Set objRootDSE = GetObject("LDAP://RootDSE")
+strDNSDomain = objRootDSE.Get("defaultNamingContext")
+
+' Use ADO to search Active Directory.
+Set objCommand = CreateObject("ADODB.Command")
+Set objConnection = CreateObject("ADODB.Connection")
+objConnection.Provider = "ADsDSOObject"
+objConnection.Open "Active Directory Provider"
+objCommand.ActiveConnection = objConnection
+
+' Search entire domain.
+strBase = "<LDAP://" & strDNSDomain & ">"
+
+' Retrieve information on all user objects.
+strFilter = "(&(objectCategory=person)(objectClass=user))"
+
+' Comma delimited list of attributes to retrieve.
+strAttributes = "sAMAccountName,memberOf"
+
+' Construct the ADO query using LDAP syntax.
+strQuery = strBase & ";" & strFilter & ";" & strAttributes & ";subtree"
+
+' Run the query.
+objCommand.CommandText = strQuery
+objCommand.Properties("Page Size") = 100
+objCommand.Properties("Timeout") = 30
+objCommand.Properties("Cache Results") = False
+Set objRecordSet = objCommand.Execute
+
+' Enumerate the recordset.
+Do Until objRecordSet.EOF
+    ' Retrieve attribute values.
+    strNTName = objRecordset.Fields("sAMAccountName").Value
+    colMemberOf = objRecordset.Fields("memberOf").Value
+    ' Convert to a sorted semicolon delimited string of group DN's.
+    strMemberOf = ParseMemberOf(colMemberOf)
+    ' Keep track of the number of users with each combination
+    ' of group memberships in the dictionary object.
+    If objMemberships.Exists(strMemberOf) Then
+        ' This combination encountered before. Increment count.
+        intCount = objMemberships(strMemberOf)
+        intCount = intCount + 1
+        objMemberships(strMemberOf) = intCount
+    Else
+        ' A new combination of group memberships.
+        objMemberships(strMemberOf) = 1
+    End If
+    objRecordSet.MoveNext
+Loop
+
+' Display the group membership combinations.
+For Each strMembership In objMemberships
+    Wscript.Echo objMemberships(strMembership) _
+        & " user(s) have the following group memberships:"
+    Call ParseGroupNames(strMembership)
+Next
+
+' Clean up.
+objRecordset.Close
+objConnection.Close
+
+Function ParseMemberOf(ByVal colMemberOf)
+    ' Function to parse memberOf attribute.
+    ' Convert to an alphabetically sorted array,
+    ' Then convert to a semicolon delimited string of
+    ' group Distinguished Names.
+
+    Dim strGroup, arrGroups(), j, k, strTemp
+
+    ' Check if colMemberOf empty (no groups).
+    If IsNull(colMemberOf) Then
+        ParseMemberOf = ""
+        Exit Function
+    End If
+
+    ' Enumerate group DN's and populate an array.
+    k = 0
+    For Each strGroup In colMemberOf
+        ReDim Preserve arrGroups(k)
+        arrGroups(k) = strGroup
+        k = k + 1
+    Next
+
+    ' Sort the array of group DN's.
+    For j = 0 To UBound(arrGroups) - 1
+        For k = 1 To UBound(arrGroups)
+            If (LCase(arrGroups(j)) > LCase(arrGroups(k))) Then
+                ' Switch the elements of the array.
+                strTemp = arrGroups(j)
+                arrGroups(j) = arrGroups(k)
+                arrGroups(k) = strTemp
+            End If
+        Next
+    Next
+
+    ' Convert the sorted array to a semicolon delimited string.
+    ParseMemberOf = Join(arrGroups, ";")
+
+End Function
+
+Sub ParseGroupNames(ByVal strMemberships)
+    ' Subroutine to display the combination of group DN's.
+
+    Dim arrGroups, strGroup
+
+    ' Convert the semicolon delimited string of group DN's to an array.
+    arrGroups = Split(strMemberships, ";")
+
+    ' Output the group DN's, one per line, indented.
+    For Each strGroup in arrGroups
+        Wscript.Echo "  " & strGroup
+    Next
+End Sub

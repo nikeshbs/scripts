@@ -1,0 +1,162 @@
+' SendMessageToGroup2.vbs
+' VBScript program to send message to members of a group.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2002 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - November 10, 2002
+' Version 1.1 - February 19, 2003 - Standardize Hungarian notation.
+' Version 1.2 - April 18, 2003 - Remove trailing backslash from
+'                                strNetBIOSDomain.
+' Version 1.3 - July 25, 2003 - Fix bug in blnForce.
+' Version 1.4 - January 25, 2004 - Modify error trapping.
+' Version 1.5 - March 18, 2004 - Modify NameTranslate constants.
+' Version 1.6 - July 30, 2007 - Escape any "/" characters in group DN.
+' Version 2.0 - October 27, 2009 - Use msg instead of net send.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+Dim objGroup, objGroupList, objShell, strMessage, intCount, strGroupPath
+Dim strGroupName, objTrans, objRootDSE, strDNSDomain, strNetBIOSDomain
+Dim intError, blnForce
+
+' Constants for the NameTranslate object.
+Const ADS_NAME_INITTYPE_GC = 3
+Const ADS_NAME_TYPE_NT4 = 3
+Const ADS_NAME_TYPE_1779 = 1
+
+' Check for required arguments.
+If (Wscript.Arguments.Count < 2) Or (Wscript.Arguments.Count > 3) Then
+    Wscript.Echo "Syntax error - wrong number of parameters"
+    Wscript.Echo "Syntax:"
+    Wscript.Echo "  cscript //nologo SendMessageToGroup2.vbs " _
+        & "GroupName Message Force"
+    Wscript.Echo "For example:"
+    Wscript.Echo "  cscript //nologo SendMessageToGroup2.vbs" _
+        & " ""Students"" ""Please logout now!"" True"
+    Wscript.Quit(1)
+End If
+
+' The first argument is the NT name of the group.
+' The second argument is the text message to be sent.
+strGroupName = Wscript.Arguments(0)
+strMessage = Wscript.Arguments(1)
+
+' The third argument, which is optional, indicates if the program will
+' wait for the "msg" command to complete before continuing. If
+' True, this allows the program to count how many users were sent the
+' message. The default is False.
+If (Wscript.Arguments.Count = 3) Then
+    Select Case UCase(Wscript.Arguments(2))
+        Case "TRUE"
+            blnForce = True
+        Case "FALSE"
+            blnForce = False
+        Case Else
+            Wscript.Echo "Syntax error - If the third parameter is given it " _
+                & "must be True or False"
+            Wscript.Echo "Syntax:"
+            Wscript.Echo "  cscript //nologo SendMessageToGroup2.vbs GroupName" _
+                & " Message Force"
+            Wscript.Echo "For example:"
+            Wscript.Echo "  cscript //nologo SendMessageToGroup2.vbs" _
+                & " ""Students"" ""Please logout now!"" True"
+            Wscript.Quit(1)
+    End Select
+Else
+    blnForce = False
+End If
+
+' If the name of the group starts with the string "CN=", it is assumed
+' to be the Distinguished Name. Otherwise, the group name is assumed to
+' be the sAMAccountName. In this case, use the NameTranslate object to
+' determine the NetBIOS domain name, and to convert the group
+' sAMAccountName to the Distinguished Name required by LDAP.
+If Not (UCase(Left(strGroupName, 3)) = "CN=") Then
+    Set objRootDSE = GetObject("LDAP://RootDSE")
+    strDNSDomain = objRootDSE.Get("defaultNamingContext")
+    Set objTrans = CreateObject("NameTranslate")
+    objTrans.Init ADS_NAME_INITTYPE_GC, ""
+    objTrans.Set ADS_NAME_TYPE_1779, strDNSDomain
+    strNetBIOSDomain = objTrans.Get(ADS_NAME_TYPE_NT4)
+    ' Remove trailing backslash.
+    strNetBIOSDomain = Left(strNetBIOSDomain, Len(strNetBIOSDomain) - 1)
+    On Error Resume Next
+    objTrans.Set ADS_NAME_TYPE_NT4, strNetBIOSDomain & "\" & strGroupName
+    If (Err.Number <> 0) Then
+        On Error GoTo 0
+        Wscript.Echo "Unable to find group: " & strGroupName
+        Wscript.Quit(1)
+    End If
+    On Error GoTo 0
+    strGroupPath = objTrans.Get(ADS_NAME_TYPE_1779)
+    ' Escape any forward slash characters, "/", with the backslash
+    ' escape character. All other characters that should be escaped are.
+    strGroupPath = Replace(strGroupPath, "/", "\/")
+Else
+    strGroupPath = strGroupName
+End If
+
+' Bind to the group object in Active Directory with the LDAP provider.
+On Error Resume Next
+Set objGroup = GetObject("LDAP://" & strGroupPath)
+If (Err.Number <> 0) Then
+    On Error GoTo 0
+    Wscript.Echo "Unable to find group " & strGroupPath
+    Wscript.Quit(1)
+End If
+On Error GoTo 0
+
+Set objGroupList = CreateObject("Scripting.Dictionary")
+Set objShell = CreateObject("Wscript.Shell")
+
+intCount = 0
+intError = 0
+
+' Enumerate the group membership and send the message.
+Call EnumGroup(objGroup)
+
+If (blnForce = True) Then
+    Wscript.Echo "Message sent to " & intCount & " users"
+    Wscript.Echo "Message not sent to " & intError & " users"
+Else
+    Wscript.Echo "Message sent"
+End If
+
+Sub EnumGroup(objADGroup)
+    ' Recursive subroutine to enumerate group membership and send a message
+    ' to each member. Includes nested group members. objGroupList is a
+    ' dictionary object with global scope. This prevents an infinite loop if
+    ' a circular nested group is encountered. This also ensures that each
+    ' user is only sent the message once, even if they are members of
+    ' multiple groups in the nesting.
+
+    Dim objMember, intRC
+
+    For Each objMember In objADGroup.Members
+        Select Case objMember.Class
+            Case "user"
+                If (objGroupList.Exists(objMember.sAMAccountName) = False) Then
+                    objGroupList.Add objMember.sAMAccountName, True
+                    intRC = objShell.Run("%COMSPEC% /c msg " _
+                        & objMember.sAMAccountName _
+                        & " " & strMessage, 0, blnForce)
+                    If (intRC = 0) Then
+                        intCount = intCount + 1
+                    Else
+                        intError = intError + 1
+                        Wscript.Echo "Message NOT sent to " _
+                            & objMember.sAMAccountName _
+                            & ", error code " & CStr(intRC)
+                    End If
+                End If
+            Case "group"
+                Call EnumGroup(objMember)
+        End Select
+    Next
+End Sub

@@ -1,0 +1,238 @@
+' ByteArrayFunctions.vbs
+' VBScript program demonstrating various functions to convert byte array
+' attributes into various formats.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2009 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - April 29, 2009
+' Version 1.1 - Jauary 18, 2010 - Modify HexSIDToDec for larger RID's.
+' Version 1.2 - April 12, 2012 - Modify DecSIDToHex for larger values.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+'
+' Function OctetToHexStr(ByVal arrbytOctet)
+'     Converts any OctetString (byte array) to Hex string.
+' Function HexGUIDToDisplay(ByVal strHexGUID)
+'     Converts GUID value in hex format to display format.
+' Function DisplayGUIDToEscapedHex(ByVal strHexGUID)
+'     Converts GUID value from display string to escaped hex
+'     format (every byte escaped with a backslash).
+' Function HexSIDToDec(ByVal strSID)
+'     Converts most hex SID values to decimal format.
+' Function DecSIDToHex(ByVal strSID)
+'    Converts SID value from decimal to hex format.
+' Function ReverseHex(ByVal strHex)
+'     Reverses hex bytes. Used by Function DecSIDToHex.
+
+Option Explicit
+
+Dim objUser, arrbytGUID, strHexGUID, strGUID
+Dim arrbytSID, strHexSID, strDecSID
+
+' Bind to user object.
+Set objUser = GetObject("LDAP://cn=Test User,ou=West,dc=MyDomain,dc=com")
+
+' Retrieve the value of the objectGUID attribute as a byte array.
+arrbytGUID = objUser.objectGUID
+' Convert byte array to hex string.
+strHexGUID = OctetToHexStr(arrbytGUID)
+Wscript.Echo "OctetToHexStr(objUser.objectGUID): " & strHexGUID
+
+' Compare to the GUID value displayed by the GUID property method.
+Wscript.Echo "objUser.GUID: " & objUser.GUID
+
+' Convert hex string into display format.
+strGUID = HexGUIDToDisplay(strHexGUID)
+Wscript.Echo "HexGUIDToDisplay(strHexGUID): " & strGUID
+
+' Convert hex string to escaped hex format.
+strHexGUID = DisplayGUIDToEscapedHex(strGUID)
+Wscript.Echo "DisplayGUIDToEscapedHex(strGUID): " & strHexGUID
+
+' Retrieve the value of the objectSID attribute as a byte array.
+arrbytSID = objUser.objectSID
+' Convert byte array to hex string.
+strHexSID = OctetToHexStr(arrbytSID)
+Wscript.Echo "OctetToHexStr(objUser.objectSID): " & strHexSID
+
+' Convert hex SID values to decimal format.
+strDecSID = HexSIDToDec(strHexSID)
+Wscript.Echo "HexSIDToDec(strHexSID): " & strDecSID
+
+' Converts decimal SID value to hex format.
+Wscript.Echo "DecSIDToHex(strDecSID): " & DecSIDToHex(strDecSID)
+
+Function OctetToHexStr(ByVal arrbytOctet)
+    ' Function to convert OctetString (byte array) to Hex string.
+
+    Dim k
+
+    OctetToHexStr = ""
+    For k = 1 To Lenb(arrbytOctet)
+        OctetToHexStr = OctetToHexStr _
+            & Right("0" & Hex(Ascb(Midb(arrbytOctet, k, 1))), 2)
+    Next
+
+End Function
+
+Function HexGUIDToDisplay(ByVal strHexGUID)
+    ' Function to convert GUID value in hex format to display format.
+
+    Dim TempGUID, GUIDStr
+
+    GUIDStr = Mid(strHexGUID, 7, 2)
+    GUIDStr = GUIDStr & Mid(strHexGUID, 5, 2)
+    GUIDStr = GUIDStr & Mid(strHexGUID, 3, 2)
+    GUIDStr = GUIDStr & Mid(strHexGUID, 1, 2)
+    GUIDStr = GUIDStr & Mid(strHexGUID, 11, 2)
+    GUIDStr = GUIDStr & Mid(strHexGUID, 9, 2)
+    GUIDStr = GUIDStr & Mid(strHexGUID, 15, 2)
+    GUIDStr = GUIDStr & Mid(strHexGUID, 13, 2)
+    GUIDStr = GUIDStr & Mid(strHexGUID, 17)
+
+    TempGUID = "{" & Mid(GUIDStr, 1, 8) & "-" & Mid(GUIDStr, 9, 4) _
+        & "-" & Mid(GUIDStr, 13, 4) & "-" & Mid(GUIDStr, 17, 4) _
+        & "-" & Mid(GUIDStr, 21, 15) & "}"
+
+    HexGUIDToDisplay = TempGUID
+
+End Function
+
+Function DisplayGUIDToEscapedHex(ByVal strGUID)
+    ' Function to convert GUID value from display string to
+    ' escaped hex format (every byte escaped with a backslash).
+
+    Dim TempGUID
+
+    TempGUID = Replace(strGUID, "{", "")
+    TempGUID = Replace(TempGUID, "}", "")
+    TempGUID = Replace(TempGUID, "-", "")
+    DisplayGUIDToEscapedHex = "\" & Mid(TempGUID, 7, 2) _
+        & "\" & Mid(TempGUID, 5, 2) _
+        & "\" & Mid(TempGUID, 3, 2) _
+        & "\" & Mid(TempGUID, 1, 2) _
+        & "\" & Mid(TempGUID, 11, 2) _
+        & "\" & Mid(TempGUID, 9, 2) _
+        & "\" & Mid(TempGUID, 15, 2) _
+        & "\" & Mid(TempGUID, 13, 2) _
+        & "\" & Mid(TempGUID, 17, 2) _
+        & "\" & Mid(TempGUID, 19, 2) _
+        & "\" & Mid(TempGUID, 21, 2) _
+        & "\" & Mid(TempGUID, 23, 2) _
+        & "\" & Mid(TempGUID, 25, 2) _
+        & "\" & Mid(TempGUID, 27, 2) _
+        & "\" & Mid(TempGUID, 29, 2) _
+        & "\" & Mid(TempGUID, 31, 2)
+
+End Function
+
+Function HexSIDToDec(ByVal strSID)
+    ' Function to convert most hex SID values to decimal format.
+
+    Dim arrbytSID, lngTemp, j
+
+    ReDim arrbytSID(Len(strSID)/2 - 1)
+    For j = 0 To UBound(arrbytSID)
+        arrbytSID(j) = CInt("&H" & Mid(strSID, 2*j + 1, 2))
+    Next
+
+    If (UBound(arrbytSID) = 11) Then
+        HexSIDToDec = "S-" & arrbytSID(0) & "-" _
+            & arrbytSID(1) & "-" & arrbytSID(8)
+
+        Exit Function
+    End If
+
+    If (UBound(arrbytSID) = 15) Then
+        HexSIDToDec = "S-" & arrbytSID(0) & "-" _
+            & arrbytSID(1) & "-" & arrbytSID(8)
+
+        lngTemp = arrbytSID(15)
+        lngTemp = lngTemp * 256 + arrbytSID(14)
+        lngTemp = lngTemp * 256 + arrbytSID(13)
+        lngTemp = lngTemp * 256 + arrbytSID(12)
+
+        HexSIDToDec = HexSIDToDec & "-" & CStr(lngTemp)
+
+        Exit Function
+    End If
+
+    HexSIDToDec = "S-" & arrbytSID(0) & "-" _
+        & arrbytSID(1) & "-" & arrbytSID(8)
+
+    lngTemp = arrbytSID(15)
+    lngTemp = lngTemp * 256 + arrbytSID(14)
+    lngTemp = lngTemp * 256 + arrbytSID(13)
+    lngTemp = lngTemp * 256 + arrbytSID(12)
+
+    HexSIDToDec = HexSIDToDec & "-" & CStr(lngTemp)
+
+    lngTemp = arrbytSID(19)
+    lngTemp = lngTemp * 256 + arrbytSID(18)
+    lngTemp = lngTemp * 256 + arrbytSID(17)
+    lngTemp = lngTemp * 256 + arrbytSID(16)
+
+    HexSIDToDec = HexSIDToDec & "-" & CStr(lngTemp)
+
+    lngTemp = arrbytSID(23)
+    lngTemp = lngTemp * 256 + arrbytSID(22)
+    lngTemp = lngTemp * 256 + arrbytSID(21)
+    lngTemp = lngTemp * 256 + arrbytSID(20)
+
+    HexSIDToDec = HexSIDToDec & "-" & CStr(lngTemp)
+
+    If (UBound(arrbytSID) > 23) Then
+        lngTemp = arrbytSID(27)
+        lngTemp = lngTemp * 256 + arrbytSID(26)
+        lngTemp = lngTemp * 256 + arrbytSID(25)
+        lngTemp = lngTemp * 256 + arrbytSID(24)
+
+        HexSIDToDec = HexSIDToDec & "-" & CStr(lngTemp)
+    End If
+
+End Function
+
+Function DecSIDToHex(ByVal strSID)
+    ' Function to convert SID value from decimal to hex format.
+    ' Break up values into high and low 16-bit parts, to prevent
+    ' overflow with the Hex function.
+
+    Dim arrstrDec, lngHi, lngLo
+    Const H = 65536
+
+    arrstrDec = Split(strSID, "-")
+    DecSIDToHex = Right("0" & Hex(arrstrDec(1)), 2)
+    DecSIDToHex = DecSIDToHex & Right("0" & Hex(arrstrDec(2)), 2)
+    DecSIDToHex = DecSIDToHex & "000000000005"
+    DecSIDToHex = DecSIDToHex & Right("0" & Hex(arrstrDec(3)), 2)
+    DecSIDToHex = DecSIDToHex & "000000"
+    lngHi = Fix(arrstrDec(4) / H)
+    lngLo = arrstrDec(4) - (lngHi * H)
+    DecSIDToHex = DecSIDToHex & ReverseHex(Right("000" & Hex(lngHi), 4) & Right("000" & Hex(lngLo), 4))
+    lngHi = Fix(arrstrDec(5) / H)
+    lngLo = arrstrDec(5) - (lngHi * H)
+    DecSIDToHex = DecSIDToHex & ReverseHex(Right("000" & Hex(lngHi), 4) & Right("000" & Hex(lngLo), 4))
+    lngHi = Fix(arrstrDec(6) / H)
+    lngLo = arrstrDec(6) - (lngHi * H)
+    DecSIDToHex = DecSIDToHex & ReverseHex(Right("000" & Hex(lngHi), 4) & Right("000" & Hex(lngLo), 4))
+    lngHi = Fix(arrstrDec(7) / H)
+    lngLo = arrstrDec(7) - (lngHi * H)
+    DecSIDToHex = DecSIDToHex & ReverseHex(Right("000" & Hex(lngHi), 4) & Right("000" & Hex(lngLo), 4))
+
+End Function
+
+Function ReverseHex(ByVal strHex)
+    ' Function to reverse hex bytes.
+
+    Dim j
+
+    ReverseHex = ""
+    For j = 0 To Len(strHex)/2 - 1
+        ReverseHex = Mid(strHex, 2*j + 1, 2) & ReverseHex
+    Next
+
+End Function

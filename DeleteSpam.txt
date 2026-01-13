@@ -1,0 +1,102 @@
+' DeleteSpam.vbs
+' VBScript program to scan Outlook Inbox for messages believed to be
+' spam and delete them. Any message with HTML source code that either
+' has an executable attachment, or references the Internet, is judged
+' to be a spam message. Caution: Some of the messages deleted by this
+' program may not be spam. It is recommended that you review the deleted
+' messages in your "Deleted Items" folder before emptying the folder.
+'
+' ----------------------------------------------------------------------
+' Copyright (c) 2003-2010 Richard L. Mueller
+' Hilltop Lab web site - http://www.rlmueller.net
+' Version 1.0 - December 3, 2003
+' Version 1.1 - November 6, 2010 - No need to set objects to Nothing.
+'
+' You have a royalty-free right to use, modify, reproduce, and
+' distribute this script file in any way you find useful, provided that
+' you agree that the copyright owner above has no warranty, obligations,
+' or liability for such use.
+
+Option Explicit
+
+' Declare variables.
+Dim objOutlook, objNamespace, lngSpam, lngTotal
+Dim strScriptPath, strScriptName, strScriptFolder, objFolder
+Dim objItem, j, k, intAttach, lngCount, blnSpam
+Dim strHTMLBody, blnExe
+Dim intF1, intF2, intF3, intF4, intF5, intF6
+
+' Define strings to search for in messages.
+Const strFilter1 = "<iframe src=""cid:"
+Const strFilter2 = "<iframe src=3d""cid:"
+Const strFilter3 = "<img src=3d""cid:"
+Const strFilter4 = "<img src=""cid:"
+Const strFilter5 = "href=""http://"
+Const strFilter6 = "src=""http://"
+
+' Determine local path.
+strScriptPath = Wscript.ScriptFullName
+strScriptName = Wscript.ScriptName
+strScriptFolder = Left(strScriptPath, Len(strScriptPath) _
+    - Len(strScriptName) - 1)
+
+Wscript.Echo "Scanning for spam messages ..."
+
+' Retrieve Outlook Inbox folder.
+Set objOutlook = CreateObject("Outlook.Application")
+Set objNamespace = objOutlook.GetNamespace("MAPI")
+Set objFolder = objNameSpace.GetDefaultFolder(6)
+
+' Initialize counters.
+lngTotal = 0
+lngSpam = 0
+
+' Enumerate messages in Inbox.
+lngCount = objFolder.Items.Count
+For k = lngCount To 1 Step - 1
+    Set objItem = objFolder.Items(k)
+    lngTotal = lngTotal + 1
+    blnSpam = False
+    blnExe = False
+    ' Look for executable attachments.
+    intAttach = objItem.Attachments.Count
+    For j = 1 to intAttach
+        If (InStr(UCase(objItem.Attachments.Item(j).FileName), _
+                ".EXE") > 0) Then
+            blnExe = True
+        End If
+    Next
+    ' Determine if the message has HTML source code.
+    On Error Resume Next
+    strHTMLBody = LCase(objItem.HTMLBody)
+    If (Err.Number <> 0) Then
+        Err.Clear
+        strHTMLBody = ""
+    End If
+    On Error GoTo 0
+    ' Search for references to the Internet in the HTML code.
+    intF1 = InStr(strHTMLBody, strFilter1)
+    intF2 = InStr(strHTMLBody, strFilter2)
+    intF3 = InStr(strHTMLBody, strFilter3)
+    intF4 = InStr(strHTMLBody, strFilter4)
+    intF5 = InStr(strHTMLBody, strFilter5)
+    intF6 = InStr(strHTMLBody, strFilter6)
+    ' Determine if the messages is spam.
+    If (strHTMLBody <> "") And (blnExe = True) Then
+        blnSpam = True
+    End If
+    If (intF1 > 0) Or (intF2 > 0) Or (intF3 > 0) Or (intF4 > 0) _
+            Or (intF5 > 0) Or (intF6 > 0) Then
+        blnSpam = True
+    End iF
+    ' Delete spam messasges.
+    If (blnSpam = True) Then
+        lngSpam = lngSpam + 1
+        objItem.Delete
+    End If
+Next
+
+Wscript.Echo "Messages processed: " & lngTotal _
+    & vbCrLf & "Spam messages deleted: " & lngSpam
+
+'Clean Up.
